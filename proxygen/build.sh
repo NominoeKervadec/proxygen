@@ -130,7 +130,7 @@ function setup_fmt() {
   fi
   cd "$FMT_DIR"
   git fetch --tags
-  git checkout 6.2.1
+  git checkout 8.0.1
   echo -e "${COLOR_GREEN}Building fmt ${COLOR_OFF}"
   mkdir -p "$FMT_BUILD_DIR"
   cd "$FMT_BUILD_DIR" || exit
@@ -205,7 +205,7 @@ function setup_folly() {
 
   if [ ! -d "$FOLLY_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning folly repo ${COLOR_OFF}"
-    git clone https://github.com/facebook/folly.git "$FOLLY_DIR"
+    git clone https://github.com/NominoeKervadec/folly.git "$FOLLY_DIR"
   fi
   synch_dependency_to_commit "$FOLLY_DIR" "$BASE_DIR"/../build/deps/github_hashes/facebook/folly-rev.txt
   if [ "$PLATFORM" = "Mac" ]; then

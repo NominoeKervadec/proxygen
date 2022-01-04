@@ -122,8 +122,7 @@ if (BUILD_SAMPLES)
 endif()
 
 if (BUILD_QUIC AND BUILD_SAMPLES)
-  add_executable(hq
-      samples/hq/main.cpp
+  add_library(hq
       samples/hq/FizzContext.cpp
       samples/hq/HQClient.cpp
       samples/hq/HQLoggerHelper.cpp

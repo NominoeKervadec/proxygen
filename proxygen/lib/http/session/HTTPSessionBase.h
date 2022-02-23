@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -498,8 +498,6 @@ class HTTPSessionBase : public wangle::ManagedConnection {
   bool isExHeadersEnabled() noexcept {
     return exHeadersEnabled_;
   }
-
-  virtual void injectTraceEventIntoAllTransactions(TraceEvent&) = 0;
 
   void setConnectionToken(
       const HTTPTransaction::ConnectionToken& token) noexcept {

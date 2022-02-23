@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -72,7 +72,7 @@ class H3DatagramAsyncSocketTest : public testing::Test {
   void onDatagram(std::unique_ptr<folly::IOBuf> datagram) {
     datagramSocket_->onDatagram(std::move(datagram));
   }
-  void connectError(std::pair<quic::QuicErrorCode, std::string> error) {
+  void connectError(quic::QuicError error) {
     datagramSocket_->connectError(std::move(error));
   }
   void onHeadersComplete(std::unique_ptr<proxygen::HTTPMessage> msg) noexcept {

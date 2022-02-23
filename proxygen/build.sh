@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -326,7 +326,7 @@ function setup_mvfst() {
   MVFST_BUILD_DIR=$DEPS_DIR/mvfst/build/
   if [ ! -d "$MVFST_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning mvfst repo ${COLOR_OFF}"
-    git clone https://github.com/facebookincubator/mvfst "$MVFST_DIR"
+    git clone https://github.com/NominoeKervadec/mvfst.git "$MVFST_DIR"
   fi
   synch_dependency_to_commit "$MVFST_DIR" "$BASE_DIR"/../build/deps/github_hashes/facebookincubator/mvfst-rev.txt
   echo -e "${COLOR_GREEN}Building Mvfst ${COLOR_OFF}"

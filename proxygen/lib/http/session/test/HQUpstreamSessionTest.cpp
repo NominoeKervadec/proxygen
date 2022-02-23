@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -361,7 +361,7 @@ TEST_P(HQUpstreamSessionTest, DropConnectionWithEarlyDataFailedError) {
   handler->txn_->sendHeaders(getGetRequest());
   handler->txn_->sendEOM();
 
-  EXPECT_CALL(*handler, onError(_))
+  EXPECT_CALL(*handler, _onError(_))
       .WillOnce(Invoke([](const HTTPException& error) {
         EXPECT_EQ(error.getProxygenError(), kErrorEarlyDataFailed);
         EXPECT_TRUE(std::string(error.what()).find("quic loses race") !=
@@ -398,29 +398,6 @@ TEST_P(HQUpstreamSessionTest, TestGetHistoricalMaxOutgoingStreams) {
                *std::get<0>(resp1),
                std::move(std::get<1>(resp1)),
                true);
-  flushAndLoop();
-  EXPECT_EQ(hqSession_->getHistoricalMaxOutgoingStreams(), 2);
-  hqSession_->closeWhenIdle();
-}
-
-TEST_P(HQUpstreamSessionTest, InjectTraceEvent) {
-  EXPECT_EQ(hqSession_->getHistoricalMaxOutgoingStreams(), 0);
-
-  auto handler = openTransaction();
-  handler->expectDetachTransaction();
-
-  auto handler1 = openTransaction();
-  handler1->expectDetachTransaction();
-
-  EXPECT_CALL(*handler, traceEventAvailable(_)).Times(1);
-  EXPECT_CALL(*handler1, traceEventAvailable(_)).Times(1);
-
-  TraceEvent te(TraceEventType::TotalRequest);
-  hqSession_->injectTraceEventIntoAllTransactions(te);
-
-  handler->txn_->sendAbort();
-  handler1->txn_->sendAbort();
-
   flushAndLoop();
   EXPECT_EQ(hqSession_->getHistoricalMaxOutgoingStreams(), 2);
   hqSession_->closeWhenIdle();
@@ -709,8 +686,8 @@ TEST_P(HQUpstreamSessionTest, TestConnectionToken) {
 
   // Clean up the session and the transaction.
   hqSession_->onConnectionError(
-      std::make_pair(quic::LocalErrorCode::CONNECT_FAILED,
-                     "Connect Failure with Open streams"));
+      quic::QuicError(quic::LocalErrorCode::CONNECT_FAILED,
+                      "Connect Failure with Open streams"));
   eventBase_.loop();
   EXPECT_EQ(hqSession_->getConnectionCloseReason(),
             ConnectionCloseReason::SHUTDOWN);
@@ -722,8 +699,8 @@ TEST_P(HQUpstreamSessionTest, OnConnectionErrorWithOpenStreams) {
   handler->expectError();
   handler->expectDetachTransaction();
   hqSession_->onConnectionError(
-      std::make_pair(quic::LocalErrorCode::CONNECT_FAILED,
-                     "Connect Failure with Open streams"));
+      quic::QuicError(quic::LocalErrorCode::CONNECT_FAILED,
+                      "Connect Failure with Open streams"));
   eventBase_.loop();
   EXPECT_EQ(hqSession_->getConnectionCloseReason(),
             ConnectionCloseReason::SHUTDOWN);
@@ -750,8 +727,8 @@ TEST_P(HQUpstreamSessionTest, OnConnectionErrorWithOpenStreamsPause) {
   flush();
   eventBase_.runInLoop([&] {
     hqSession_->onConnectionError(
-        std::make_pair(quic::LocalErrorCode::CONNECT_FAILED,
-                       "Connect Failure with Open streams"));
+        quic::QuicError(quic::LocalErrorCode::CONNECT_FAILED,
+                        "Connect Failure with Open streams"));
   });
   handler1->expectError(
       [&](const HTTPException&) { handler2->txn_->pauseIngress(); });
@@ -783,7 +760,7 @@ TEST_P(HQUpstreamSessionTestH1qv2HQ, GoawayStreamsUnacknowledged) {
     auto handler = handlers.back().get();
     handler->txn_->sendHeaders(getGetRequest());
     handler->txn_->sendEOM();
-    EXPECT_CALL(*handler, onGoaway(testing::_)).Times(2);
+    EXPECT_CALL(*handler, _onGoaway(testing::_)).Times(2);
     if (handler->txn_->getID() >= goawayId) {
       handler->expectError([hdlr = handler](const HTTPException& err) {
         EXPECT_TRUE(err.hasProxygenError());
@@ -1049,7 +1026,7 @@ TEST_P(HQUpstreamSessionTestHQ, TestOnStopSendingHTTPRequestRejected) {
             socketDriver_->setWriteError(id);
             return folly::unit;
           }));
-  EXPECT_CALL(*handler, onError(_))
+  EXPECT_CALL(*handler, _onError(_))
       .Times(1)
       .WillOnce(Invoke([](HTTPException ex) {
         EXPECT_EQ(kErrorStreamUnacknowledged, ex.getProxygenError());
@@ -1891,7 +1868,7 @@ TEST_P(HQUpstreamSessionTestHQPush, TestCloseDroppedConnection) {
   // Two "onError" calls are expected:
   // the first when MockQuicSocketDriver closes the socket
   // the second when the error is propagated to the stream
-  EXPECT_CALL(*assocHandler_, onError(testing::_)).Times(2);
+  EXPECT_CALL(*assocHandler_, _onError(testing::_)).Times(2);
 
   // Create a nascent push stream with a preface only
   createNascentPushStream(1111 /* streamId */, folly::none /* pushId */);
@@ -2003,7 +1980,7 @@ TEST_P(HQUpstreamSessionTestHQDatagram, TestReceiveEarlyDatagramsSingleStream) {
   auto resp = makeResponse(200, 0);
   sendResponse(id, *std::get<0>(resp), std::move(std::get<1>(resp)), false);
   handler->expectHeaders();
-  EXPECT_CALL(*handler, onDatagram(testing::_))
+  EXPECT_CALL(*handler, _onDatagram(testing::_))
       .Times(kDefaultMaxBufferedDatagrams);
   flushAndLoopN(1);
   auto it = streams_.find(id);
@@ -2039,7 +2016,7 @@ TEST_P(HQUpstreamSessionTestHQDatagram, TestReceiveEarlyDatagramsMultiStream) {
     auto resp = makeResponse(200, 0);
     sendResponse(id, *std::get<0>(resp), std::move(std::get<1>(resp)), false);
     handler->expectHeaders();
-    EXPECT_CALL(*handler, onDatagram(testing::_))
+    EXPECT_CALL(*handler, _onDatagram(testing::_))
         .WillRepeatedly(InvokeWithoutArgs([&]() { deliveredDatagrams++; }));
     flushAndLoopN(1);
     auto it = streams_.find(id);

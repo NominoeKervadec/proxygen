@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -103,7 +103,6 @@ class HQSessionTest
           std::chrono::milliseconds(kTransactionTimeout),
           &controllerContainer_.mockController,
           proxygen::mockTransportInfo,
-          nullptr,
           nullptr);
       nextUnidirectionalStreamId_ = 2;
     } else if (direction_ == proxygen::TransportDirection::UPSTREAM) {
@@ -112,7 +111,6 @@ class HQSessionTest
           std::chrono::milliseconds(kConnectTimeout),
           &controllerContainer_.mockController,
           proxygen::mockTransportInfo,
-          nullptr,
           nullptr);
       nextUnidirectionalStreamId_ = 3;
     } else {
@@ -134,7 +132,8 @@ class HQSessionTest
     }
     socketDriver_ = std::make_unique<quic::MockQuicSocketDriver>(
         &eventBase_,
-        *hqSession_,
+        hqSession_,
+        hqSession_,
         direction_ == proxygen::TransportDirection::DOWNSTREAM
             ? quic::MockQuicSocketDriver::TransportEnum::SERVER
             : quic::MockQuicSocketDriver::TransportEnum::CLIENT,

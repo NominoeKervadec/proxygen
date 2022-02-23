@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -294,8 +294,6 @@ class HTTPSession
     return draining_;
   }
 
-  virtual void injectTraceEventIntoAllTransactions(TraceEvent& event) override;
-
   bool readsUnpaused() const {
     return reads_ == SocketState::UNPAUSED;
   }
@@ -571,7 +569,8 @@ class HTTPSession
    */
   void shutdownTransport(bool shutdownReads = true,
                          bool shutdownWrites = true,
-                         const std::string& errorMsg = "");
+                         const std::string& errorMsg = "",
+                         ProxygenError error = kErrorEOF);
 
   /**
    * Immediately close the socket in both directions, discarding any

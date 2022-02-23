@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -89,7 +89,6 @@ using namespace proxygen::hq;
 namespace proxygen {
 
 const std::string kH3FBCurrentDraft("h3-fb-05");
-const std::string kH3LegacyDraft("h3-27");
 const std::string kH3CurrentDraft("h3-29");
 const std::string kHQCurrentDraft("hq-29");
 const std::string kH3("h3");
@@ -251,6 +250,7 @@ bool HQSession::onTransportReadyCommon() noexcept {
     defaultSettings.push_back({SettingsId::_HQ_DATAGRAM, 1});
     sock_->setDatagramCallback(this);
   }
+  sock_->setPingCallback(this);
   // TODO: 0-RTT settings
   versionUtils_->applySettings(defaultSettings);
   // notifyPendingShutdown may be invoked before onTransportReady,
@@ -291,8 +291,9 @@ bool HQSession::createEgressControlStream(UnidirectionalStreamType streamType) {
   if (id.hasError()) {
     LOG(ERROR) << "Failed to create " << streamType
                << " unidirectional stream. error='" << id.error() << "'";
-    onConnectionError(std::make_pair(quic::LocalErrorCode::CONNECT_FAILED,
-                                     "Failed to create unidirectional stream"));
+    onConnectionError(
+        quic::QuicError(quic::LocalErrorCode::CONNECT_FAILED,
+                        "Failed to create unidirectional stream"));
     return false;
   }
 
@@ -323,8 +324,8 @@ HQSession::createIngressControlStream(quic::StreamId id,
   if (ctrlStream->ingressCodec_) {
     LOG(ERROR) << "Too many " << streamType << " streams for sess=" << *this;
     dropConnectionAsync(
-        std::make_pair(HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR,
-                       "HTTP wrong stream count"),
+        quic::QuicError(HTTP3::ErrorCode::HTTP_STREAM_CREATION_ERROR,
+                        "HTTP wrong stream count"),
         kErrorConnection);
     return nullptr;
   }
@@ -394,7 +395,7 @@ bool HQSession::getAndCheckApplicationProtocol() {
     } else if (alpn == kH1QV2ProtocolString) {
       version_ = HQVersion::H1Q_FB_V2;
     } else if (alpn == kH3FBCurrentDraft || alpn == kH3 ||
-               alpn == kH3CurrentDraft || alpn == kH3LegacyDraft) {
+               alpn == kH3CurrentDraft) {
       version_ = HQVersion::HQ;
     }
   }
@@ -404,8 +405,8 @@ bool HQSession::getAndCheckApplicationProtocol() {
     LOG(ERROR) << "next protocol not supported: "
                << (alpn ? *alpn : "no protocol") << " sess=" << *this;
 
-    onConnectionError(std::make_pair(quic::LocalErrorCode::CONNECT_FAILED,
-                                     "ALPN not supported"));
+    onConnectionError(quic::QuicError(quic::LocalErrorCode::CONNECT_FAILED,
+                                      "ALPN not supported"));
     return false;
   }
   alpn_ = *alpn;
@@ -445,6 +446,14 @@ void HQSession::onReplaySafe() noexcept {
   waitingForReplaySafety_.clear();
 }
 
+void HQSession::onConnectionEnd(quic::QuicError error) noexcept {
+  if (noError(error.code)) {
+    onConnectionEnd();
+  } else {
+    onConnectionError(std::move(error));
+  }
+}
+
 void HQSession::onConnectionEnd() noexcept {
   VLOG(4) << __func__ << " sess=" << *this;
   // The transport will not call onConnectionEnd after we call close(),
@@ -464,21 +473,19 @@ void HQSession::HQVersionUtils::onConnectionEnd() {
   qpackCodec_.decoderStreamEnd();
 }
 
-void HQSession::onConnectionSetupError(
-    std::pair<quic::QuicErrorCode, std::string> code) noexcept {
+void HQSession::onConnectionSetupError(quic::QuicError code) noexcept {
   onConnectionError(std::move(code));
 }
 
-void HQSession::onConnectionError(
-    std::pair<quic::QuicErrorCode, std::string> code) noexcept {
+void HQSession::onConnectionError(quic::QuicError code) noexcept {
   // the connector will drop the connection in case of connect error
   HQSession::DestructorGuard dg(this);
   VLOG(4) << __func__ << " sess=" << *this
-          << ": connection error=" << code.second;
+          << ": connection error=" << code.message;
 
   // Map application errors here to kErrorConnectionReset: eg, the peer tore
   // down the connection
-  auto proxygenErr = toProxygenError(code.first, /*fromPeer=*/true);
+  auto proxygenErr = toProxygenError(code.code, /*fromPeer=*/true);
   if (proxygenErr == kErrorNone && !streams_.empty()) {
     // Peer closed with NO_ERROR but there are open streams
     proxygenErr = kErrorEOF;
@@ -487,17 +494,17 @@ void HQSession::onConnectionError(
     infoCallback_->onIngressError(*this, proxygenErr);
   }
 
-  if (code.first.type() == quic::QuicErrorCode::Type::ApplicationErrorCode &&
-      isQPACKError(static_cast<HTTP3::ErrorCode>(
-          *code.first.asApplicationErrorCode()))) {
+  if (code.code.type() == quic::QuicErrorCode::Type::ApplicationErrorCode &&
+      isQPACKError(
+          static_cast<HTTP3::ErrorCode>(*code.code.asApplicationErrorCode()))) {
     LOG(ERROR) << "Peer QPACK error err="
-               << static_cast<uint32_t>(*code.first.asApplicationErrorCode())
-               << " msg=" << code.second << " " << *this;
-  } else if (!noError(code.first)) {
+               << static_cast<uint32_t>(*code.code.asApplicationErrorCode())
+               << " msg=" << code.message << " " << *this;
+  } else if (!noError(code.code)) {
     std::stringstream msgStream;
-    msgStream << "Peer closed with error err=" << code.first
-              << " msg=" << code.second << " " << *this;
-    if (isVlogLevel(code.first)) {
+    msgStream << "Peer closed with error err=" << code.code
+              << " msg=" << code.message << " " << *this;
+    if (isVlogLevel(code.code)) {
       VLOG(3) << msgStream.str();
     } else {
       LOG(ERROR) << msgStream.str();
@@ -817,13 +824,12 @@ void HQSession::closeWhenIdle() {
 
 void HQSession::dropConnection(const std::string& errorMsg) {
   auto msg = errorMsg.empty() ? "Stopping" : errorMsg;
-  dropConnectionSync(std::make_pair(HTTP3::ErrorCode::HTTP_NO_ERROR, msg),
+  dropConnectionSync(quic::QuicError(HTTP3::ErrorCode::HTTP_NO_ERROR, msg),
                      kErrorDropped);
 }
 
-void HQSession::dropConnectionAsync(
-    std::pair<quic::QuicErrorCode, std::string> errorCode,
-    ProxygenError proxygenError) {
+void HQSession::dropConnectionAsync(quic::QuicError errorCode,
+                                    ProxygenError proxygenError) {
   if (!dropInNextLoop_.has_value()) {
     dropInNextLoop_ = std::make_pair(errorCode, proxygenError);
     scheduleLoopCallback(true);
@@ -832,9 +838,8 @@ void HQSession::dropConnectionAsync(
   }
 }
 
-void HQSession::dropConnectionSync(
-    std::pair<quic::QuicErrorCode, std::string> errorCode,
-    ProxygenError proxygenError) {
+void HQSession::dropConnectionSync(quic::QuicError errorCode,
+                                   ProxygenError proxygenError) {
   VLOG(4) << __func__ << " sess=" << *this;
   HQSession::DestructorGuard dg(this);
   // dropping_ is used to guard against dropConnection->onError->dropConnection
@@ -847,7 +852,7 @@ void HQSession::dropConnectionSync(
     return;
   }
   dropping_ = true;
-  onConnectionErrorHandler(errorCode);
+  onConnectionSetupErrorHandler(errorCode);
   if (getNumStreams() > 0) {
     // should deliver errors to all open streams, they will all detach-
     sock_->close(std::move(errorCode));
@@ -915,7 +920,7 @@ void HQSession::checkForShutdown() {
       !isLoopCallbackScheduled()) {
     if (sock_) {
       auto err = HTTP3::ErrorCode::HTTP_NO_ERROR;
-      sock_->close(std::make_pair(quic::QuicErrorCode(err), toString(err)));
+      sock_->close(quic::QuicError(quic::QuicErrorCode(err), toString(err)));
       sock_.reset();
     }
 
@@ -1057,15 +1062,6 @@ bool HQSession::eraseStream(quic::StreamId streamId) {
   return erased;
 }
 
-void HQSession::injectTraceEventIntoAllTransactions(TraceEvent& event) {
-  invokeOnAllStreams([event](HQStreamTransportBase* stream) {
-    HTTPTransactionHandler* handler = stream->txn_.getHandler();
-    if (handler != nullptr) {
-      handler->traceEventAvailable(event);
-    }
-  });
-}
-
 void HQSession::runLoopCallback() noexcept {
   // We schedule this callback to run at the end of an event
   // loop iteration if either of two conditions has happened:
@@ -1198,20 +1194,17 @@ void HQSession::readAvailable(quic::StreamId id) noexcept {
   scheduleLoopCallback(true);
 }
 
-void HQSession::readError(
-    quic::StreamId id,
-    std::pair<quic::QuicErrorCode, folly::Optional<folly::StringPiece>>
-        error) noexcept {
+void HQSession::readError(quic::StreamId id, quic::QuicError error) noexcept {
   VLOG(4) << __func__ << " sess=" << *this << ": readError streamID=" << id
           << " error: " << error;
 
   HTTPException ex(HTTPException::Direction::INGRESS_AND_EGRESS,
                    folly::to<std::string>("Got error=", quic::toString(error)));
 
-  switch (error.first.type()) {
+  switch (error.code.type()) {
     case quic::QuicErrorCode::Type::ApplicationErrorCode: {
       auto errorCode =
-          static_cast<HTTP3::ErrorCode>(*error.first.asApplicationErrorCode());
+          static_cast<HTTP3::ErrorCode>(*error.code.asApplicationErrorCode());
       VLOG(3) << "readError: QUIC Application Error: " << toString(errorCode)
               << " streamID=" << id << " sess=" << *this;
       ex.setHttp3ErrorCode(errorCode);
@@ -1228,7 +1221,7 @@ void HQSession::readError(
       break;
     }
     case quic::QuicErrorCode::Type::LocalErrorCode: {
-      quic::LocalErrorCode& errorCode = *error.first.asLocalErrorCode();
+      quic::LocalErrorCode& errorCode = *error.code.asLocalErrorCode();
       VLOG(3) << "readError: QUIC Local Error: " << errorCode
               << " streamID=" << id << " sess=" << *this;
       if (errorCode == quic::LocalErrorCode::CONNECT_FAILED) {
@@ -1240,7 +1233,7 @@ void HQSession::readError(
       break;
     }
     case quic::QuicErrorCode::Type::TransportErrorCode: {
-      quic::TransportErrorCode& errorCode = *error.first.asTransportErrorCode();
+      quic::TransportErrorCode& errorCode = *error.code.asTransportErrorCode();
       VLOG(3) << "readError: QUIC Transport Error: " << errorCode
               << " streamID=" << id << " sess=" << *this;
       ex.setProxygenError(kErrorConnectionReset);
@@ -1320,7 +1313,7 @@ void HQSession::readControlStream(HQControlStream* ctrlStream) {
   if (readRes.hasError()) {
     LOG(ERROR) << "Got synchronous read error=" << readRes.error();
     readError(ctrlStream->getIngressStreamId(),
-              {readRes.error(), folly::StringPiece("sync read error")});
+              quic::QuicError(readRes.error(), "sync read error"));
     return;
   }
   resetTimeout();
@@ -1459,7 +1452,7 @@ void HQSession::controlStreamReadError(
   auto ctrlStream = findControlStream(id);
 
   if (!ctrlStream) {
-    const quic::LocalErrorCode* err = error.first.asLocalErrorCode();
+    const quic::LocalErrorCode* err = error.code.asLocalErrorCode();
     bool shouldLog = !err || (*err != quic::LocalErrorCode::NO_ERROR);
     LOG_IF(ERROR, shouldLog)
         << __func__ << " received read error=" << error
@@ -1469,8 +1462,8 @@ void HQSession::controlStreamReadError(
 
   handleSessionError(ctrlStream,
                      StreamDirection::INGRESS,
-                     quicControlStreamError(error.first),
-                     toProxygenError(error.first));
+                     quicControlStreamError(error.code),
+                     toProxygenError(error.code));
 }
 
 void HQSession::readRequestStream(quic::StreamId id) noexcept {
@@ -1485,7 +1478,7 @@ void HQSession::readRequestStream(quic::StreamId id) noexcept {
 
   if (readRes.hasError()) {
     LOG(ERROR) << "Got synchronous read error=" << readRes.error();
-    readError(id, {readRes.error(), folly::StringPiece("sync read error")});
+    readError(id, quic::QuicError(readRes.error(), "sync read error"));
     return;
   }
 
@@ -1636,8 +1629,8 @@ void HQSession::HQVersionUtils::applySettings(const SettingsList& settings) {
   // transport, close the connection
   if (datagram && session_.sock_->getDatagramSizeLimit() == 0) {
     session_.dropConnectionAsync(
-        std::make_pair(HTTP3::ErrorCode::HTTP_SETTINGS_ERROR,
-                       "H3_DATAGRAM without transport support"),
+        quic::QuicError(HTTP3::ErrorCode::HTTP_SETTINGS_ERROR,
+                        "H3_DATAGRAM without transport support"),
         kErrorConnection);
   }
   // H3 Datagram flows are bi-directional, enable only of local and peer
@@ -1670,7 +1663,7 @@ void HQSession::onGoaway(uint64_t minUnseenId,
   if (minUnseenId > minPeerUnseenId_) {
     LOG(ERROR) << "Goaway id increased=" << minUnseenId << " sess=" << *this;
     dropConnectionAsync(
-        std::make_pair(HTTP3::ErrorCode::HTTP_ID_ERROR, "GOAWAY id increased"),
+        quic::QuicError(HTTP3::ErrorCode::HTTP_ID_ERROR, "GOAWAY id increased"),
         kErrorMalformedInput);
     return;
   }
@@ -1724,8 +1717,8 @@ void HQSession::onPushPriority(hq::PushId pushId, const HTTPPriority& pri) {
   if (maxAllowedPushId_.hasValue() && *maxAllowedPushId_ < pushId) {
     VLOG(4) << "Priority update stream id=" << pushId
             << " greater than max allowed push id=" << *maxAllowedPushId_;
-    dropConnectionAsync(std::make_pair(HTTP3::ErrorCode::HTTP_ID_ERROR,
-                                       "PushId is beyond max allowed push id"),
+    dropConnectionAsync(quic::QuicError(HTTP3::ErrorCode::HTTP_ID_ERROR,
+                                        "PushId is beyond max allowed push id"),
                         kErrorMalformedInput);
     return;
   }
@@ -1811,9 +1804,7 @@ void HQSession::onConnectionWriteReady(uint64_t maxToSend) noexcept {
   scheduleLoopCallback(true);
 }
 
-void HQSession::onConnectionWriteError(
-    std::pair<quic::QuicErrorCode, folly::Optional<folly::StringPiece>>
-        error) noexcept {
+void HQSession::onConnectionWriteError(quic::QuicError error) noexcept {
   scheduledWrite_ = false;
   VLOG(4) << __func__ << " sess=" << *this << ": writeError error=" << error;
   // Leave this as a no-op.  We will most likely get onConnectionError soon
@@ -1929,7 +1920,9 @@ void HQSession::handleSessionError(HQStreamBase* stream,
     case quic::QuicErrorCode::Type::LocalErrorCode:
       // a LocalErrorCode::NO_ERROR is expected whenever the socket gets
       // closed without error
-      shouldDrop = (*err.asLocalErrorCode() != quic::LocalErrorCode::NO_ERROR);
+      shouldDrop =
+          (*err.asLocalErrorCode() != quic::LocalErrorCode::NO_ERROR &&
+           *err.asLocalErrorCode() != quic::LocalErrorCode::SHUTTING_DOWN);
       break;
     case quic::QuicErrorCode::Type::TransportErrorCode:
       shouldDrop = true;
@@ -1947,7 +1940,7 @@ void HQSession::handleSessionError(HQStreamBase* stream,
   // close received from the remote, we may have other readError callbacks on
   // other streams after this one. So run in the next loop callback, in this
   // same loop
-  dropConnectionAsync(std::make_pair(appError, appErrorMsg), proxygenError);
+  dropConnectionAsync(quic::QuicError(appError, appErrorMsg), proxygenError);
 }
 
 uint64_t HQSession::writeRequestStreams(uint64_t maxEgress) noexcept {
@@ -2858,7 +2851,6 @@ HQSession::HQStreamTransportBase::generateHeadersCommon(
                                    session_.getExtraHeaders(headers, streamId));
 
   const uint64_t newOffset = streamWriteByteOffset();
-  egressHeadersStreamOffset_ = newOffset;
   if (size) {
     VLOG(4) << "sending headers, size=" << size->compressed
             << ", uncompressedSize=" << size->uncompressed << " txn=" << txn_;
@@ -3243,6 +3235,7 @@ size_t HQSession::HQStreamTransportBase::sendBody(
   CHECK(codecStreamId_);
 
   bufMeta_.length += body.length;
+  bodyBytesEgressed_ += body.length;
   uint64_t offset = streamWriteByteOffset();
 
   if (auto httpSessionActivityTracker =
@@ -3295,8 +3288,9 @@ size_t HQSession::HQStreamTransportBase::sendBody(
     std::unique_ptr<folly::IOBuf> body,
     bool includeEOM,
     bool /* trackLastByteFlushed */) noexcept {
-  VLOG(4) << __func__ << " len=" << body->computeChainDataLength()
-          << " eof=" << includeEOM << " txn=" << txn_;
+  auto bodyLength = body->computeChainDataLength();
+  VLOG(4) << __func__ << " len=" << bodyLength << " eof=" << includeEOM
+          << " txn=" << txn_;
   CHECK(hasEgressStreamId()) << __func__ << " invoked on stream without egress";
   DCHECK(txn == &txn_);
   CHECK_EQ(0, bufMeta_.length);
@@ -3309,6 +3303,7 @@ size_t HQSession::HQStreamTransportBase::sendBody(
                                                       std::move(body),
                                                       HTTPCodec::NoPadding,
                                                       includeEOM);
+  bodyBytesEgressed_ += bodyLength;
   if (auto httpSessionActivityTracker =
           session_.getHTTPSessionActivityTracker()) {
     httpSessionActivityTracker->addTrackedEgressByteEvent(
@@ -3369,7 +3364,7 @@ void HQSession::HQStreamTransportBase::onMessageBegin(
     LOG(ERROR) << error << " streamID=" << streamID << " session=" << session_;
     // TODO: Audit this error code
     session_.dropConnectionAsync(
-        std::make_pair(HTTP3::ErrorCode::HTTP_FRAME_ERROR, error),
+        quic::QuicError(HTTP3::ErrorCode::HTTP_FRAME_ERROR, error),
         kErrorDropped);
     return;
   }
@@ -3387,24 +3382,30 @@ void HQSession::HQStreamTransportBase::onMessageBegin(
   ingressPushId_ = folly::none;
 }
 
-void HQSession::HQStreamTransportBase::trackEgressBodyDelivery(
-    uint64_t bodyOffset) {
+void HQSession::HQStreamTransportBase::trackEgressBodyOffset(
+    uint64_t bodyOffset, proxygen::ByteEvent::EventFlags eventFlags) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
-  uint64_t streamOffset = egressHeadersStreamOffset_ + bodyOffset;
+  // This calculation is only accurate for a body offset in the most recently
+  // generated DATA frame.  Any earlier offsets will skew large by factoring in
+  // more recent frame headers or non-DATA frames.  Any later offsets will skew
+  // small because the number of non-body bytes is not known.
+  uint64_t streamOffset =
+      (streamWriteByteOffset() - bodyBytesEgressed_) + bodyOffset;
   // We need to track last byte sent offset, so substract one here.
   auto offset = streamOffset - 1;
-  armEgressBodyAckCb(offset);
-  VLOG(4) << __func__ << ": armed body delivery callback for offset=" << offset
-          << "; last egress headers offset=" << egressHeadersStreamOffset_
-          << "; txn=" << txn_;
+  armEgressBodyCallbacks(bodyOffset, offset, eventFlags);
+  VLOG(4) << __func__ << ": armed body byte event cb for offset=" << offset
+          << "; body offset=" << bodyOffset
+          << "; flags=" << uint32_t(eventFlags) << "; txn=" << txn_;
 }
 
-void HQSession::HQStreamTransportBase::armStreamAckCb(uint64_t streamOffset) {
-  auto res = session_.sock_->registerDeliveryCallback(
-      getEgressStreamId(), streamOffset, this);
+void HQSession::HQStreamTransportBase::armStreamByteEventCb(
+    uint64_t streamOffset, quic::QuicSocket::ByteEvent::Type type) {
+  auto res = session_.sock_->registerByteEventCallback(
+      type, getEgressStreamId(), streamOffset, this);
   if (res.hasError()) {
     auto errStr = folly::to<std::string>(
-        "failed to register delivery callback: ", toString(res.error()));
+        "failed to register byte event callback: ", toString(res.error()));
     LOG(ERROR) << errStr;
     HTTPException ex(HTTPException::Direction::INGRESS_AND_EGRESS, errStr);
     ex.setProxygenError(kErrorNetwork);
@@ -3417,25 +3418,42 @@ void HQSession::HQStreamTransportBase::armStreamAckCb(uint64_t streamOffset) {
   // and ack/cancel from transport here.
   txn_.incrementPendingByteEvents();
 
-  VLOG(4) << __func__
-          << ": registered ack callback for offset = " << streamOffset
-          << "; sess=" << session_ << "; txn=" << txn_;
+  VLOG(4) << __func__ << ": registered type=" << uint32_t(type)
+          << " callback for offset=" << streamOffset << "; sess=" << session_
+          << "; txn=" << txn_;
 }
 
 void HQSession::HQStreamTransportBase::armEgressHeadersAckCb(
     uint64_t streamOffset) {
-  VLOG(4) << __func__ << ": registering headers delivery callback for offset = "
+  VLOG(4) << __func__ << ": registering headers delivery callback for offset="
           << streamOffset << "; sess=" << session_ << "; txn=" << txn_;
-  armStreamAckCb(streamOffset);
+  armStreamByteEventCb(streamOffset, quic::QuicSocket::ByteEvent::Type::ACK);
   egressHeadersAckOffset_ = streamOffset;
 }
 
-void HQSession::HQStreamTransportBase::armEgressBodyAckCb(
-    uint64_t streamOffset) {
-  VLOG(4) << __func__ << ": registering body delivery callback for offset = "
-          << streamOffset << "; sess=" << session_ << "; txn=" << txn_;
-  armStreamAckCb(streamOffset);
-  egressBodyAckOffsets_.insert(streamOffset);
+void HQSession::HQStreamTransportBase::armEgressBodyCallbacks(
+    uint64_t bodyOffset,
+    uint64_t streamOffset,
+    proxygen::ByteEvent::EventFlags eventFlags) {
+  VLOG(4) << __func__ << ": registering body byte event callback for offset="
+          << streamOffset << "; flags=" << uint32_t(eventFlags)
+          << "; sess=" << session_ << "; txn=" << txn_;
+  if (eventFlags & proxygen::ByteEvent::EventFlags::TX) {
+    armStreamByteEventCb(streamOffset, quic::QuicSocket::ByteEvent::Type::TX);
+    auto res = egressBodyByteEventOffsets_.try_emplace(
+        streamOffset, BodyByteOffset(bodyOffset, 1));
+    if (!res.second) {
+      res.first->second.callbacks++;
+    }
+  }
+  if (eventFlags & proxygen::ByteEvent::EventFlags::ACK) {
+    armStreamByteEventCb(streamOffset, quic::QuicSocket::ByteEvent::Type::ACK);
+    auto res = egressBodyByteEventOffsets_.try_emplace(
+        streamOffset, BodyByteOffset(bodyOffset, 1));
+    if (!res.second) {
+      res.first->second.callbacks++;
+    }
+  }
 }
 
 void HQSession::HQStreamTransportBase::handleHeadersAcked(
@@ -3448,89 +3466,96 @@ void HQSession::HQStreamTransportBase::handleHeadersAcked(
     return;
   }
 
-  VLOG(4) << __func__
-          << ": got delivery ack for egress headers, stream offset = "
+  VLOG(4) << __func__ << ": got delivery ack for egress headers, stream offset="
           << streamOffset << "; sess=" << session_ << "; txn=" << txn_;
 
   resetEgressHeadersAckOffset();
   txn_.onLastEgressHeaderByteAcked();
 }
 
-void HQSession::HQStreamTransportBase::handleBodyAcked(uint64_t streamOffset) {
+void HQSession::HQStreamTransportBase::handleBodyEvent(
+    uint64_t streamOffset, quic::QuicSocket::ByteEvent::Type type) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
   CHECK(session_.versionUtils_);
 
-  CHECK_GE(streamOffset, egressHeadersStreamOffset_);
-  uint64_t bodyOffset = streamOffset - egressHeadersStreamOffset_;
-
-  VLOG(4) << __func__
-          << ": got delivery ack for egress body, bodyOffset = " << bodyOffset
+  auto bodyOffset = resetEgressBodyEventOffset(streamOffset);
+  if (!bodyOffset) {
+    LOG(DFATAL) << __func__ << ": received an unexpected byte event at offset "
+                << streamOffset << "; sess=" << session_ << "; txn=" << txn_;
+    return;
+  }
+  VLOG(4) << __func__ << ": got byte event type=" << uint32_t(type)
+          << " for egress body, bodyOffset=" << *bodyOffset
           << "; sess=" << session_ << "; txn=" << txn_;
 
-  resetEgressBodyAckOffset(streamOffset);
-  txn_.onEgressBodyBytesAcked(bodyOffset);
+  if (type == quic::QuicSocket::ByteEvent::Type::ACK) {
+    txn_.onEgressBodyBytesAcked(*bodyOffset);
+  } else if (type == quic::QuicSocket::ByteEvent::Type::TX) {
+    txn_.onEgressBodyBytesTx(*bodyOffset);
+  }
 }
 
-void HQSession::HQStreamTransportBase::handleBodyCancelled(
-    uint64_t streamOffset) {
+void HQSession::HQStreamTransportBase::handleBodyEventCancelled(
+    uint64_t streamOffset, quic::QuicSocket::ByteEvent::Type) {
   auto g = folly::makeGuard(setActiveCodec(__func__));
   CHECK(session_.versionUtils_);
 
-  CHECK_GE(streamOffset, egressHeadersStreamOffset_);
-  uint64_t bodyOffset = streamOffset - egressHeadersStreamOffset_;
-
-  resetEgressBodyAckOffset(streamOffset);
-  txn_.onEgressBodyDeliveryCanceled(bodyOffset);
+  auto bodyOffset = resetEgressBodyEventOffset(streamOffset);
+  if (!bodyOffset) {
+    LOG(DFATAL) << __func__
+                << ": received an unexpected onCanceled event at offset "
+                << streamOffset;
+    return;
+  }
+  // Use the same callback whether the body did not TX or did not ACK.  Caller
+  // may received this more than once if they asked to track both.
+  txn_.onEgressBodyDeliveryCanceled(*bodyOffset);
 }
 
-void HQSession::HQStreamTransportBase::onDeliveryAck(
-    quic::StreamId /* id */,
-    uint64_t offset,
-    std::chrono::microseconds /* rtt */) {
-  VLOG(4) << __func__ << ": got delivery ack for offset = " << offset
-          << "; sess=" << session_ << "; txn=" << txn_;
+void HQSession::HQStreamTransportBase::onByteEvent(
+    quic::QuicSocket::ByteEvent byteEvent) {
+  VLOG(4) << __func__ << ": got byte event type=" << uint32_t(byteEvent.type)
+          << " for offset=" << byteEvent.offset << "; sess=" << session_
+          << "; txn=" << txn_;
 
   DCHECK_GT(numActiveDeliveryCallbacks_, 0);
   numActiveDeliveryCallbacks_--;
   txn_.decrementPendingByteEvents();
 
+  // For a given type (ACK|TX), onByteEvent calls will be called from QuicSocket
+  // with monotonically increasing offsets.
   if (egressHeadersAckOffset_) {
-    handleHeadersAcked(offset);
-    return;
+    if (byteEvent.type == quic::QuicSocket::ByteEvent::Type::ACK) {
+      handleHeadersAcked(byteEvent.offset);
+      return;
+    }
+    // else we don't track header byte tx (yet), but it could be a body TX
   }
 
-  if (egressBodyAckOffsets_.find(offset) != egressBodyAckOffsets_.end()) {
-    handleBodyAcked(offset);
-    return;
-  }
-
-  LOG(DFATAL) << __func__
-              << ": received an unexpected onDeliveryAck event at offset "
-              << offset << "; sess=" << session_ << "; txn=" << txn_;
+  handleBodyEvent(byteEvent.offset, byteEvent.type);
 }
 
-void HQSession::HQStreamTransportBase::onCanceled(quic::StreamId id,
-                                                  uint64_t offset) {
-  VLOG(3) << __func__ << ": data cancelled on stream = " << id
-          << ", offset = " << offset << "; sess=" << session_
+void HQSession::HQStreamTransportBase::onByteEventCanceled(
+    quic::QuicSocket::ByteEventCancellation cancellation) {
+  VLOG(3) << __func__ << ": data cancelled on stream=" << cancellation.id
+          << ", type=" << uint32_t(cancellation.type)
+          << ", offset=" << cancellation.offset << "; sess=" << session_
           << "; txn=" << txn_;
   DCHECK_GT(numActiveDeliveryCallbacks_, 0);
   numActiveDeliveryCallbacks_--;
   txn_.decrementPendingByteEvents();
 
+  // Are byte events of a given type always cancelled in offset order?
+
   if (egressHeadersAckOffset_) {
-    resetEgressHeadersAckOffset();
-    return;
+    if (cancellation.type == quic::QuicSocket::ByteEvent::Type::ACK) {
+      resetEgressHeadersAckOffset();
+      return;
+    }
+    // else we don't track header byte tx (yet), but it could be a body TX
   }
 
-  if (egressBodyAckOffsets_.find(offset) != egressBodyAckOffsets_.end()) {
-    handleBodyCancelled(offset);
-    return;
-  }
-
-  LOG(DFATAL) << __func__
-              << ": received an unexpected onCanceled event at offset "
-              << offset;
+  handleBodyEventCancelled(cancellation.offset, cancellation.type);
 }
 
 // Methods specific to StreamTransport subclasses
@@ -3548,7 +3573,7 @@ void HQSession::HQStreamTransportBase::onPushMessageBegin(
     LOG(ERROR) << error;
     // TODO: Audit this error code
     session_.dropConnectionAsync(
-        std::make_pair(HTTP3::ErrorCode::HTTP_FRAME_ERROR, error),
+        quic::QuicError(HTTP3::ErrorCode::HTTP_FRAME_ERROR, error),
         kErrorDropped);
     return;
   }
@@ -3667,12 +3692,12 @@ void HQSession::HQStreamTransport::onPushPromiseHeadersComplete(
 }
 
 void HQSession::onDatagramsAvailable() noexcept {
-  auto result = sock_->readDatagrams();
+  auto result = sock_->readDatagramBufs();
   if (result.hasError()) {
     LOG(ERROR) << "Got error while reading datagrams: error="
                << toString(result.error());
-    dropConnectionAsync(std::make_pair(HTTP3::ErrorCode::HTTP_INTERNAL_ERROR,
-                                       "H3_DATAGRAM: internal error "),
+    dropConnectionAsync(quic::QuicError(HTTP3::ErrorCode::HTTP_INTERNAL_ERROR,
+                                        "H3_DATAGRAM: internal error "),
                         kErrorConnection);
     return;
   }
@@ -3683,15 +3708,15 @@ void HQSession::onDatagramsAvailable() noexcept {
     auto quarterStreamId = quic::decodeQuicInteger(cursor);
     if (!quarterStreamId) {
       dropConnectionAsync(
-          std::make_pair(HTTP3::ErrorCode::HTTP_GENERAL_PROTOCOL_ERROR,
-                         "H3_DATAGRAM: error decoding stream-id"),
+          quic::QuicError(HTTP3::ErrorCode::HTTP_GENERAL_PROTOCOL_ERROR,
+                          "H3_DATAGRAM: error decoding stream-id"),
           kErrorConnection);
     }
     auto ctxId = quic::decodeQuicInteger(cursor);
     if (!ctxId) {
       dropConnectionAsync(
-          std::make_pair(HTTP3::ErrorCode::HTTP_GENERAL_PROTOCOL_ERROR,
-                         "H3_DATAGRAM: error decoding context-id"),
+          quic::QuicError(HTTP3::ErrorCode::HTTP_GENERAL_PROTOCOL_ERROR,
+                          "H3_DATAGRAM: error decoding context-id"),
           kErrorConnection);
     }
 

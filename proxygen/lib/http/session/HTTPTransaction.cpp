@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -100,7 +100,6 @@ HTTPTransaction::HTTPTransaction(
       priorityFallback_(false),
       headRequest_(false),
       enableLastByteFlushedTracking_(false),
-      enableBodyLastByteDeliveryTracking_(false),
       egressHeadersDelivered_(false),
       has1xxResponse_(false),
       isDelegated_(false),
@@ -261,7 +260,7 @@ bool HTTPTransaction::updateContentLengthRemaining(size_t len) {
           expectedIngressContentLengthRemaining_.value() - len;
     } else {
       auto errorMsg = folly::to<std::string>(
-          "Content-Length/body mismatch: received=",
+          "Content-Length/body mismatch onIngressBody: received=",
           len,
           " expecting no more than ",
           expectedIngressContentLengthRemaining_.value());
@@ -281,7 +280,11 @@ void HTTPTransaction::onIngressBody(unique_ptr<IOBuf> chain, uint16_t padding) {
   FOLLY_SCOPED_TRACE_SECTION("HTTPTransaction - onIngressBody");
   DestructorGuard g(this);
   if (isIngressEOMSeen()) {
-    sendAbort(ErrorCode::STREAM_CLOSED);
+    std::stringstream ss;
+    // Use stringstream to invoke operator << for this
+    ss << "onIngressBody after ingress closed " << *this;
+    VLOG(4) << ss.str();
+    abortAndDeliverError(ErrorCode::STREAM_CLOSED, ss.str());
     return;
   }
   auto len = chain->computeChainDataLength();
@@ -301,11 +304,13 @@ void HTTPTransaction::onIngressBody(unique_ptr<IOBuf> chain, uint16_t padding) {
   }
   // register the bytes in the receive window
   if (!recvWindow_.reserve(len + padding, useFlowControl_)) {
-    LOG(ERROR)
-        << "recvWindow_.reserve failed with len=" << len
-        << " padding=" << padding << " capacity=" << recvWindow_.getCapacity()
-        << " outstanding=" << recvWindow_.getOutstanding() << " " << *this;
-    sendAbort(ErrorCode::FLOW_CONTROL_ERROR);
+    std::stringstream ss;
+    // Use stringstream to invoke operator << for this
+    ss << "recvWindow_.reserve failed with len=" << len
+       << " padding=" << padding << " capacity=" << recvWindow_.getCapacity()
+       << " outstanding=" << recvWindow_.getOutstanding() << " " << *this;
+    LOG(ERROR) << ss.str();
+    abortAndDeliverError(ErrorCode::FLOW_CONTROL_ERROR, ss.str());
     return;
   } else {
     INVARIANT(recvWindow_.free(padding));
@@ -461,13 +466,17 @@ void HTTPTransaction::processIngressUpgrade(UpgradeProtocol protocol) {
 void HTTPTransaction::onIngressEOM() {
   if (isIngressEOMSeen()) {
     // This can happen when HTTPSession calls onIngressEOF()
-    sendAbort(ErrorCode::STREAM_CLOSED);
+    std::stringstream ss;
+    // Use stringstream to invoke operator << for this
+    ss << "onIngressEOM after ingress closed " << *this;
+    VLOG(4) << ss.str();
+    abortAndDeliverError(ErrorCode::STREAM_CLOSED, ss.str());
     return;
   }
   if (expectedIngressContentLengthRemaining_.has_value() &&
       expectedIngressContentLengthRemaining_.value() > 0) {
     auto errorMsg = folly::to<std::string>(
-        "Content-Length/body mismatch: expecting another ",
+        "Content-Length/body mismatch onIngressEOM: expecting another ",
         expectedIngressContentLengthRemaining_.value());
     LOG(ERROR) << errorMsg << " " << *this;
     if (handler_) {
@@ -596,12 +605,23 @@ bool HTTPTransaction::validateEgressStateTransition(
 }
 
 void HTTPTransaction::invariantViolation(HTTPException ex) {
+  LOG(ERROR) << "invariantViolation msg=" << ex.what()
+             << " aborted_=" << uint32_t(aborted_) << " " << *this;
   sendAbort();
   if (handler_) {
     handler_->onInvariantViolation(ex);
   } else {
     LOG(FATAL) << "Invariant violation with no handler; ex=" << ex.what();
   }
+}
+
+void HTTPTransaction::abortAndDeliverError(ErrorCode codecError,
+                                           const std::string& msg) {
+  HTTPException ex(HTTPException::Direction::INGRESS_AND_EGRESS, msg);
+  ex.setCodecStatusCode(codecError);
+  // onError will call sendAbort if there is a codec status code and no
+  // proxygen error code.  It will *also* notify the handler.
+  onError(ex);
 }
 
 void HTTPTransaction::onError(const HTTPException& error) {
@@ -731,11 +751,13 @@ void HTTPTransaction::onIngressWindowUpdate(const uint32_t amount) {
   if (sendWindow_.free(amount)) {
     notifyTransportPendingEgress();
   } else {
-    LOG(ERROR) << "sendWindow_.free failed with amount=" << amount
-               << " capacity=" << sendWindow_.getCapacity()
-               << " outstanding=" << sendWindow_.getOutstanding() << " "
-               << *this;
-    sendAbort(ErrorCode::FLOW_CONTROL_ERROR);
+    std::stringstream ss;
+    // Use stringstream to invoke operator << for this
+    ss << "sendWindow_.free failed with amount=" << amount
+       << " capacity=" << sendWindow_.getCapacity()
+       << " outstanding=" << sendWindow_.getOutstanding() << " " << *this;
+    LOG(ERROR) << ss.str();
+    abortAndDeliverError(ErrorCode::FLOW_CONTROL_ERROR, ss.str());
   }
 }
 
@@ -747,11 +769,13 @@ void HTTPTransaction::onIngressSetSendWindow(const uint32_t newWindowSize) {
   if (sendWindow_.setCapacity(newWindowSize)) {
     notifyTransportPendingEgress();
   } else {
-    LOG(ERROR)
-        << "sendWindow_.setCapacity failed with newWindowSize=" << newWindowSize
-        << " capacity=" << sendWindow_.getCapacity()
-        << " outstanding=" << sendWindow_.getOutstanding() << " " << *this;
-    sendAbort(ErrorCode::FLOW_CONTROL_ERROR);
+    std::stringstream ss;
+    // Use stringstream to invoke operator << for this
+    ss << "sendWindow_.setCapacity failed with newWindowSize=" << newWindowSize
+       << " capacity=" << sendWindow_.getCapacity()
+       << " outstanding=" << sendWindow_.getOutstanding() << " " << *this;
+    LOG(ERROR) << ss.str();
+    abortAndDeliverError(ErrorCode::FLOW_CONTROL_ERROR, ss.str());
   }
 }
 
@@ -817,6 +841,14 @@ void HTTPTransaction::onEgressBodyBytesAcked(uint64_t bodyOffset) {
   DestructorGuard g(this);
   if (transportCallback_) {
     transportCallback_->bodyBytesDelivered(bodyOffset);
+  }
+}
+
+void HTTPTransaction::onEgressBodyBytesTx(uint64_t bodyOffset) {
+  FOLLY_SCOPED_TRACE_SECTION("HTTPTransaction - onEgressBodyBytesTx");
+  DestructorGuard g(this);
+  if (transportCallback_) {
+    transportCallback_->bodyBytesTx(bodyOffset);
   }
 }
 
@@ -1017,9 +1049,6 @@ void HTTPTransaction::sendBody(std::unique_ptr<folly::IOBuf> body) {
           << "Sent body longer than chunk header ";
     }
     deferredEgressBody_.append(std::move(body));
-    if (*actualResponseLength_ && enableBodyLastByteDeliveryTracking_) {
-      transport_.trackEgressBodyDelivery(*actualResponseLength_);
-    }
     if (isEnqueued()) {
       transport_.notifyEgressBodyBuffered(bodyLen);
     }
@@ -1039,9 +1068,6 @@ bool HTTPTransaction::addBufferMeta() noexcept {
   deferredBufferMeta_.length = bufferMetaLen;
   actualResponseLength_ = bufferMetaLen;
 
-  if (enableBodyLastByteDeliveryTracking_) {
-    transport_.trackEgressBodyDelivery(bufferMetaLen);
-  }
   if (isEnqueued()) {
     transport_.notifyEgressBodyBuffered(bufferMetaLen);
   }
@@ -1157,6 +1183,13 @@ size_t HTTPTransaction::sendDeferredBufferMeta(uint32_t maxEgress) {
   }
   updateReadTimeout();
   nbytes = transport_.sendBody(this, bufferMeta, sendEom);
+  bodyBytesEgressed_ += bufferMeta.length;
+  for (auto it = egressBodyOffsetsToTrack_.begin();
+       it != egressBodyOffsetsToTrack_.end() && it->first < bodyBytesEgressed_;
+       it = egressBodyOffsetsToTrack_.begin()) {
+    transport_.trackEgressBodyOffset(it->first, it->second);
+    egressBodyOffsetsToTrack_.erase(it);
+  }
   if (isPrioritySampled()) {
     updateTransactionBytesSent(bufferMeta.length);
   }
@@ -1276,6 +1309,13 @@ size_t HTTPTransaction::sendBodyNow(std::unique_ptr<folly::IOBuf> body,
                                std::move(body),
                                sendEom && !trailers_,
                                enableLastByteFlushedTracking_);
+  bodyBytesEgressed_ += bodyLen;
+  for (auto it = egressBodyOffsetsToTrack_.begin();
+       it != egressBodyOffsetsToTrack_.end() && it->first < bodyBytesEgressed_;
+       it = egressBodyOffsetsToTrack_.begin()) {
+    transport_.trackEgressBodyOffset(it->first, it->second);
+    egressBodyOffsetsToTrack_.erase(it);
+  }
   if (sendEom && trailers_) {
     nbytes += sendEOMNow();
   }
@@ -1295,11 +1335,11 @@ void HTTPTransaction::sendEOM() {
   }
   if (expectedResponseLength_ && actualResponseLength_ &&
       (*expectedResponseLength_ != *actualResponseLength_)) {
-    auto errorMsg =
-        folly::to<std::string>("Content-Length/body mismatch: expected= ",
-                               *expectedResponseLength_,
-                               ", actual= ",
-                               *actualResponseLength_);
+    auto errorMsg = folly::to<std::string>(
+        "Content-Length/body mismatch sendEOM: expected=",
+        *expectedResponseLength_,
+        ", actual= ",
+        *actualResponseLength_);
     LOG(ERROR) << errorMsg << " " << *this;
   }
 
@@ -1355,6 +1395,21 @@ void HTTPTransaction::sendAbort(ErrorCode statusCode) {
     size.uncompressed = nbytes;
     transportCallback_->headerBytesGenerated(size);
   }
+}
+
+bool HTTPTransaction::trackEgressBodyOffset(uint64_t offset,
+                                            ByteEvent::EventFlags flags) {
+  if (transport_.getSessionType() != Transport::Type::QUIC) {
+    // for now
+    return false;
+  }
+  if (offset < bodyBytesEgressed_) {
+    // we've egressed this byte already, ask transport to track it
+    transport_.trackEgressBodyOffset(offset, flags);
+  } else {
+    egressBodyOffsetsToTrack_.emplace(offset, flags);
+  }
+  return true;
 }
 
 uint16_t HTTPTransaction::getDatagramSizeLimit() const noexcept {

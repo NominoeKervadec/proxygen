@@ -1,12 +1,12 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
  * LICENSE file in the root directory of this source tree.
  */
 
-#include "folly/Expected.h"
+#include <folly/Expected.h>
 #include <proxygen/lib/http/session/HQDownstreamSession.h>
 
 #include <folly/io/async/EventBaseManager.h>
@@ -151,7 +151,7 @@ HQDownstreamSessionTest::addSimpleStrictHandlerBase() {
       .WillOnce(testing::Return(rawHandler))
       .RetiresOnSaturation();
 
-  EXPECT_CALL(*handler, setTransaction(testing::_))
+  EXPECT_CALL(*handler, _setTransaction(testing::_))
       .WillOnce(testing::SaveArg<0>(&handler->txn_));
 
   return handler;
@@ -279,7 +279,7 @@ void HQDownstreamSessionTest::expectTransactionTimeout(
   EXPECT_CALL(getMockController(),
               getTransactionTimeoutHandler(testing::_, testing::_))
       .WillOnce(testing::Return(&handler));
-  EXPECT_CALL(handler, setTransaction(testing::_))
+  EXPECT_CALL(handler, _setTransaction(testing::_))
       .WillOnce(testing::SaveArg<0>(&handler.txn_));
   handler.expectError(
       [&handler, &fn](const proxygen::HTTPException& ex) mutable {
@@ -402,9 +402,9 @@ TEST_P(HQDownstreamSessionTestHQPush, PushPriority) {
     pushTxn->sendBody(makeBuf(200));
     pushTxn->sendEOM();
   });
-  EXPECT_CALL(pushHandler, setTransaction(_))
+  EXPECT_CALL(pushHandler, _setTransaction(_))
       .WillOnce(Invoke([&](HTTPTransaction* txn) { pushHandler.txn_ = txn; }));
-  EXPECT_CALL(pushHandler, detachTransaction());
+  EXPECT_CALL(pushHandler, _detachTransaction());
 
   flushRequestsAndLoopN(1);
   handler->txn_->sendEOM();
@@ -481,7 +481,7 @@ TEST_P(HQDownstreamSessionTest, HttpRateLimitNormal) {
     handler1->sendHeaders(200, rspLengthBytes);
     handler1->sendBody(rspLengthBytes);
   });
-  EXPECT_CALL(*handler1, onEgressPaused()).Times(AtLeast(1));
+  EXPECT_CALL(*handler1, _onEgressPaused()).Times(AtLeast(1));
   handler1->expectEgressResumed([&handler1] { handler1->txn_->sendEOM(); });
   handler1->expectDetachTransaction();
   flushRequestsAndLoop();
@@ -1230,7 +1230,7 @@ TEST_P(HQDownstreamSessionTest, TransportErrorWithOpenStream) {
     eventBase_.runInLoop([this] {
       // This should error out the stream first, then destroy the session
       socketDriver_->deliverConnectionError(
-          std::make_pair(quic::TransportErrorCode::PROTOCOL_VIOLATION, ""));
+          quic::QuicError(quic::TransportErrorCode::PROTOCOL_VIOLATION, ""));
     });
   });
   handler->expectError([](const HTTPException& ex) {
@@ -1303,7 +1303,7 @@ TEST_P(HQDownstreamSessionTest, WriteErrorFlowControl) {
 // Connection error on idle connection
 TEST_P(HQDownstreamSessionTest, ConnectionErrorIdle) {
   socketDriver_->deliverConnectionError(
-      std::make_pair(quic::TransportErrorCode::PROTOCOL_VIOLATION, ""));
+      quic::QuicError(quic::TransportErrorCode::PROTOCOL_VIOLATION, ""));
   eventBase_.loopOnce();
 }
 
@@ -1324,7 +1324,7 @@ TEST_P(HQDownstreamSessionTestH1q, BadHttp) {
   testing::StrictMock<MockHTTPHandler> handler;
   EXPECT_CALL(getMockController(), getParseErrorHandler(_, _, _))
       .WillOnce(Return(&handler));
-  EXPECT_CALL(handler, setTransaction(testing::_))
+  EXPECT_CALL(handler, _setTransaction(testing::_))
       .WillOnce(testing::SaveArg<0>(&handler.txn_));
   handler.expectError([&handler](const HTTPException& ex) {
     EXPECT_TRUE(ex.hasHttpStatusCode());
@@ -1347,7 +1347,7 @@ TEST_P(HQDownstreamSessionTestH1q, BadHttpHeaders) {
   testing::StrictMock<MockHTTPHandler> handler;
   EXPECT_CALL(getMockController(), getParseErrorHandler(_, _, _))
       .WillOnce(Return(&handler));
-  EXPECT_CALL(handler, setTransaction(testing::_))
+  EXPECT_CALL(handler, _setTransaction(testing::_))
       .WillOnce(testing::SaveArg<0>(&handler.txn_));
   handler.expectError([&handler](const HTTPException& ex) {
     EXPECT_TRUE(ex.hasHttpStatusCode());
@@ -1384,7 +1384,7 @@ TEST_P(HQDownstreamSessionTest, BadHttpStrict) {
   testing::StrictMock<MockHTTPHandler> handler;
   EXPECT_CALL(getMockController(), getParseErrorHandler(_, _, _))
       .WillOnce(Return(&handler));
-  EXPECT_CALL(handler, setTransaction(testing::_))
+  EXPECT_CALL(handler, _setTransaction(testing::_))
       .WillOnce(testing::SaveArg<0>(&handler.txn_));
   handler.expectError([&handler](const HTTPException& ex) {
     EXPECT_TRUE(ex.hasHttpStatusCode());
@@ -1404,7 +1404,7 @@ TEST_P(HQDownstreamSessionTest, BadHttpHeadersStrict) {
   testing::StrictMock<MockHTTPHandler> handler;
   EXPECT_CALL(getMockController(), getParseErrorHandler(_, _, _))
       .WillOnce(Return(&handler));
-  EXPECT_CALL(handler, setTransaction(testing::_))
+  EXPECT_CALL(handler, _setTransaction(testing::_))
       .WillOnce(testing::SaveArg<0>(&handler.txn_));
   handler.expectError([&handler](const HTTPException& ex) {
     EXPECT_TRUE(ex.hasHttpStatusCode());
@@ -1507,7 +1507,7 @@ TEST_P(HQDownstreamSessionTest, PauseResume) {
   hqSession_->closeWhenIdle();
 
   // After resume, body (2 calls) and EOM delivered
-  EXPECT_CALL(*handler, onBodyWithOffset(_, _)).Times(2);
+  EXPECT_CALL(*handler, _onBodyWithOffset(_, _)).Times(2);
   handler->expectEOM([&handler] { handler->sendReplyWithBody(200, 100); });
   handler->expectDetachTransaction();
   handler2->expectHeaders(
@@ -1580,7 +1580,7 @@ TEST_P(HQDownstreamSessionTestH1q, ManagedTimeoutReadReset) {
       250);
   handler->expectEOM([&handler] { handler->sendReplyWithBody(200, 100); });
   handler->expectHeaders();
-  EXPECT_CALL(*handler, onBodyWithOffset(testing::_, testing::_)).Times(3);
+  EXPECT_CALL(*handler, _onBodyWithOffset(testing::_, testing::_)).Times(3);
   handler->expectDetachTransaction();
   flushRequestsAndLoop();
 }
@@ -1978,14 +1978,14 @@ TEST_P(HQDownstreamSessionTest, LocalErrQueuedEgress) {
   });
   handler->expectDetachTransaction();
   socketDriver_->deliverConnectionError(
-      std::make_pair(quic::LocalErrorCode::CONNECTION_RESET, ""));
+      quic::QuicError(quic::LocalErrorCode::CONNECTION_RESET, ""));
   flushRequestsAndLoop();
 }
 
 TEST_P(HQDownstreamSessionTest, NoErrorNoStreams) {
   EXPECT_CALL(infoCb_, onIngressError(_, kErrorNone));
   socketDriver_->deliverConnectionError(
-      std::make_pair(HTTP3::ErrorCode::HTTP_NO_ERROR, ""));
+      quic::QuicError(HTTP3::ErrorCode::HTTP_NO_ERROR, ""));
   flushRequestsAndLoop();
 }
 
@@ -2003,7 +2003,7 @@ TEST_P(HQDownstreamSessionTest, NoErrorOneStreams) {
   // This is for connection level errors, maybe should be reported a
   EXPECT_CALL(infoCb_, onIngressError(_, kErrorEOF));
   socketDriver_->deliverConnectionError(
-      std::make_pair(HTTP3::ErrorCode::HTTP_NO_ERROR, ""));
+      quic::QuicError(HTTP3::ErrorCode::HTTP_NO_ERROR, ""));
 }
 
 TEST_P(HQDownstreamSessionTestHQ, Connect) {
@@ -2013,7 +2013,7 @@ TEST_P(HQDownstreamSessionTestHQ, Connect) {
   handler->expectEOM([&] { handler->terminate(); });
 
   // Data should be received using onBody
-  EXPECT_CALL(*handler, onBodyWithOffset(_, _))
+  EXPECT_CALL(*handler, _onBodyWithOffset(_, _))
       .WillOnce(ExpectString("12345"))
       .WillOnce(ExpectString("abcdefg"));
   handler->expectDetachTransaction();
@@ -2047,7 +2047,7 @@ TEST_P(HQDownstreamSessionTestHQ, ConnectUDP) {
   handler->expectEOM([&] { handler->terminate(); });
 
   // Data should be received using onBody
-  EXPECT_CALL(*handler, onBodyWithOffset(_, _))
+  EXPECT_CALL(*handler, _onBodyWithOffset(_, _))
       .WillOnce(ExpectString("12345"))
       .WillOnce(ExpectString("abcdefg"));
   handler->expectDetachTransaction();
@@ -2327,7 +2327,7 @@ TEST_P(HQDownstreamSessionTestHQ, QPACKHeadersTooLarge) {
   testing::StrictMock<MockHTTPHandler> errHandler;
   EXPECT_CALL(getMockController(), getParseErrorHandler(_, _, _))
       .WillOnce(Return(&errHandler));
-  EXPECT_CALL(errHandler, setTransaction(testing::_))
+  EXPECT_CALL(errHandler, _setTransaction(testing::_))
       .WillOnce(testing::SaveArg<0>(&errHandler.txn_));
   errHandler.expectError([&errHandler](const HTTPException& ex) {
     EXPECT_EQ(ex.getHttp3ErrorCode(),
@@ -2395,7 +2395,7 @@ TEST_P(HQDownstreamSessionTest, ProcessReadDataOnDetachedStream) {
           stream.readCB->readAvailable(id);
           // now send an error so that the stream gets marked for detach
           stream.readCB->readError(
-              id, std::make_pair(HTTP3::ErrorCode::HTTP_NO_ERROR, folly::none));
+              id, quic::QuicError(HTTP3::ErrorCode::HTTP_NO_ERROR));
           // then closeWhenIdle (like during shutdown), this calls
           // checkForShutdown that calls checkForDetach and may detach a
           // transaction that was added to the pendingProcessReadSet in the same
@@ -2815,6 +2815,37 @@ TEST_P(HQDownstreamSessionTest, getHTTPPriority) {
   hqSession_->closeWhenIdle();
 }
 
+TEST_P(HQDownstreamSessionTest, IdleTimeoutNoStreams) {
+  std::chrono::milliseconds connIdleTimeout{200};
+  auto connManager = wangle::ConnectionManager::makeUnique(
+      &eventBase_, connIdleTimeout, nullptr);
+  connManager->addConnection(hqSession_, true);
+  // Just run the loop, the session will timeout, drain and close
+  auto start = std::chrono::steady_clock::now();
+  eventBase_.loop();
+  auto end = std::chrono::steady_clock::now();
+  EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+                .count(),
+            connIdleTimeout.count());
+}
+
+TEST_P(HQDownstreamSessionTest, IdleTimeoutResetWithPing) {
+  std::chrono::milliseconds connIdleTimeout{200};
+  auto connManager = wangle::ConnectionManager::makeUnique(
+      &eventBase_, connIdleTimeout, nullptr);
+  connManager->addConnection(hqSession_, true);
+  for (int i = 1; i <= 4; i++) {
+    socketDriver_->addPingReceivedReadEvent(std::chrono::milliseconds(100));
+  }
+  // Just run the loop, the session will timeout, drain and close
+  auto start = std::chrono::steady_clock::now();
+  flushRequestsAndLoop();
+  auto end = std::chrono::steady_clock::now();
+  EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+                .count(),
+            connIdleTimeout.count() * 2);
+}
+
 /**
  * Instantiate the Parametrized test cases
  */
@@ -2951,9 +2982,9 @@ TEST_P(HQDownstreamSessionTestHQPush, SimplePush) {
     pushTxn->sendBody(makeBuf(200));
     pushTxn->sendEOM();
   });
-  EXPECT_CALL(pushHandler, setTransaction(_))
+  EXPECT_CALL(pushHandler, _setTransaction(_))
       .WillOnce(Invoke([&](HTTPTransaction* txn) { pushHandler.txn_ = txn; }));
-  EXPECT_CALL(pushHandler, detachTransaction());
+  EXPECT_CALL(pushHandler, _detachTransaction());
 
   flushRequestsAndLoopN(1);
   handler->txn_->sendEOM();
@@ -2995,9 +3026,9 @@ TEST_P(HQDownstreamSessionTestHQPush, PushPriorityCallback) {
     pushTxn->sendBody(makeBuf(200));
     pushTxn->sendEOM();
   });
-  EXPECT_CALL(pushHandler, setTransaction(_))
+  EXPECT_CALL(pushHandler, _setTransaction(_))
       .WillOnce(Invoke([&](HTTPTransaction* txn) { pushHandler.txn_ = txn; }));
-  EXPECT_CALL(pushHandler, detachTransaction());
+  EXPECT_CALL(pushHandler, _detachTransaction());
 
   flushRequestsAndLoopN(1);
 
@@ -3055,10 +3086,10 @@ TEST_P(HQDownstreamSessionTestHQPush, StopSending) {
     pushTxn->sendBody(makeBuf(200));
     // NO EOM
   });
-  EXPECT_CALL(pushHandler, setTransaction(_))
+  EXPECT_CALL(pushHandler, _setTransaction(_))
       .WillOnce(Invoke([&](HTTPTransaction* txn) { pushHandler.txn_ = txn; }));
-  EXPECT_CALL(pushHandler, onError(_));
-  EXPECT_CALL(pushHandler, detachTransaction());
+  EXPECT_CALL(pushHandler, _onError(_));
+  EXPECT_CALL(pushHandler, _detachTransaction());
 
   flushRequestsAndLoopN(1);
   handler->txn_->sendEOM();
@@ -3154,9 +3185,13 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck,
   // This is a copy of the one in MockQuicSocketDriver, only hijacks data stream
   // and forces an error.
   EXPECT_CALL(*sock,
-              registerDeliveryCallback(testing::_, testing::_, testing::_))
+              registerByteEventCallback(quic::QuicSocket::ByteEvent::Type::ACK,
+                                        testing::_,
+                                        testing::_,
+                                        testing::_))
       .WillRepeatedly(
           testing::Invoke([streamId, &socketDriver = socketDriver_](
+                              quic::QuicSocket::ByteEvent::Type,
                               quic::StreamId id,
                               uint64_t offset,
                               MockQuicSocket::ByteEventCallback* cb)
@@ -3177,10 +3212,10 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck,
             return folly::unit;
           }));
 
-  EXPECT_CALL(*handler, onError(_))
+  EXPECT_CALL(*handler, _onError(_))
       .WillOnce(Invoke([](const HTTPException& error) {
         EXPECT_TRUE(std::string(error.what())
-                        .find("failed to register delivery callback") !=
+                        .find("failed to register byte event callback") !=
                     std::string::npos);
       }));
   handler->expectDetachTransaction();
@@ -3195,20 +3230,48 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyDeliveryAck) {
   auto handler = addSimpleStrictHandler();
   handler->expectHeaders();
 
+  auto length = 42;
+  auto offset = length - 1;
   // Start the response.
   handler->expectEOM([&]() {
     handler->txn_->setTransportCallback(&transportCallback_);
-    handler->sendHeaders(200, 42);
-    auto res = handler->txn_->setBodyLastByteDeliveryTrackingEnabled(true);
-    EXPECT_TRUE(res);
-    handler->sendBody(42);
+    handler->sendHeaders(200, length);
+    handler->sendBody(length);
+    EXPECT_TRUE(handler->txn_->trackEgressBodyOffset(
+        handler->txn_->bodyBytesSent() - 1, ByteEvent::EventFlags::ACK));
     handler->sendEOM();
   });
 
   handler->expectDetachTransaction();
   flushRequestsAndLoop();
   EXPECT_EQ(transportCallback_.numBodyBytesDeliveredCalls_, 1);
-  EXPECT_EQ(transportCallback_.bodyBytesDeliveredOffset_, 41);
+  EXPECT_EQ(transportCallback_.bodyBytesDeliveredOffset_, offset);
+
+  hqSession_->closeWhenIdle();
+}
+
+TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyTxCallback) {
+  auto req = getGetRequest();
+  sendRequest(req);
+  auto handler = addSimpleStrictHandler();
+  handler->expectHeaders();
+
+  auto length = 42;
+  auto offset = length - 1;
+  // Start the response.
+  handler->expectEOM([&]() {
+    handler->txn_->setTransportCallback(&transportCallback_);
+    handler->sendHeaders(200, length);
+    EXPECT_TRUE(handler->txn_->trackEgressBodyOffset(
+        offset, ByteEvent::EventFlags::TX));
+    handler->sendBody(length);
+    handler->sendEOM();
+  });
+
+  handler->expectDetachTransaction();
+  flushRequestsAndLoop();
+  EXPECT_EQ(transportCallback_.numBodyBytesTxCalls_, 1);
+  EXPECT_EQ(transportCallback_.bodyBytesTxOffset_, offset);
 
   hqSession_->closeWhenIdle();
 }
@@ -3219,12 +3282,18 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyDeliveryAckMultiple) {
   auto handler = addSimpleStrictHandler();
   handler->expectHeaders();
 
+  auto length = 42 + 17;
+  auto offset1 = 41;
+  auto offset2 = length - 1;
   // Start the response.
   handler->expectEOM([&]() {
     handler->txn_->setTransportCallback(&transportCallback_);
-    handler->sendHeaders(200, 42 + 17);
-    auto res = handler->txn_->setBodyLastByteDeliveryTrackingEnabled(true);
-    EXPECT_TRUE(res);
+    handler->sendHeaders(200, length);
+    // Test registering callbacks before sendBody
+    EXPECT_TRUE(handler->txn_->trackEgressBodyOffset(
+        offset1, ByteEvent::EventFlags::TX | ByteEvent::EventFlags::ACK));
+    EXPECT_TRUE(handler->txn_->trackEgressBodyOffset(
+        offset2, ByteEvent::EventFlags::ACK));
     handler->sendBody(42);
     handler->sendBody(17);
     handler->sendEOM();
@@ -3232,8 +3301,10 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyDeliveryAckMultiple) {
 
   handler->expectDetachTransaction();
   flushRequestsAndLoop();
+  EXPECT_EQ(transportCallback_.numBodyBytesTxCalls_, 1);
+  EXPECT_EQ(transportCallback_.bodyBytesTxOffset_, offset1);
   EXPECT_EQ(transportCallback_.numBodyBytesDeliveredCalls_, 2);
-  EXPECT_EQ(transportCallback_.bodyBytesDeliveredOffset_, 41 + 17);
+  EXPECT_EQ(transportCallback_.bodyBytesDeliveredOffset_, offset2);
 
   hqSession_->closeWhenIdle();
 }
@@ -3244,12 +3315,14 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyDeliveryErr) {
   auto handler = addSimpleStrictHandler();
   handler->expectHeaders();
 
+  auto length = 42;
+  auto offset = length - 1;
   // Start the response.
   handler->expectEOM([&]() {
     handler->txn_->setTransportCallback(&transportCallback_);
-    handler->sendHeaders(200, 42);
-    auto res = handler->txn_->setBodyLastByteDeliveryTrackingEnabled(true);
-    EXPECT_TRUE(res);
+    handler->sendHeaders(200, length);
+    EXPECT_TRUE(handler->txn_->trackEgressBodyOffset(
+        offset, ByteEvent::EventFlags::ACK));
   });
   flushRequestsAndLoop();
   EXPECT_TRUE(transportCallback_.lastEgressHeadersByteDelivered_);
@@ -3265,11 +3338,15 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyDeliveryErr) {
   // This is a copy of the one in MockQuicSocketDriver, only hijacks data stream
   // and forces an error.
   EXPECT_CALL(*sock,
-              registerDeliveryCallback(testing::_, testing::_, testing::_))
+              registerByteEventCallback(quic::QuicSocket::ByteEvent::Type::ACK,
+                                        testing::_,
+                                        testing::_,
+                                        testing::_))
       .WillRepeatedly(testing::Invoke(
           [streamId,
            &streamOffsetAfterHeaders = streamOffsetAfterHeaders,
-           &socketDriver = socketDriver_](quic::StreamId id,
+           &socketDriver = socketDriver_](quic::QuicSocket::ByteEvent::Type,
+                                          quic::StreamId id,
                                           uint64_t offset,
                                           MockQuicSocket::ByteEventCallback* cb)
               -> folly::Expected<folly::Unit, LocalErrorCode> {
@@ -3294,10 +3371,10 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyDeliveryErr) {
             return folly::unit;
           }));
 
-  EXPECT_CALL(*handler, onError(_))
+  EXPECT_CALL(*handler, _onError(_))
       .WillOnce(Invoke([&handler = handler](const HTTPException& error) {
         EXPECT_TRUE(std::string(error.what())
-                        .find("failed to register delivery callback") !=
+                        .find("failed to register byte event callback") !=
                     std::string::npos);
         handler->txn_->sendAbort();
       }));
@@ -3314,26 +3391,28 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyDeliveryCancel) {
   auto handler = addSimpleStrictHandler();
   handler->expectHeaders();
 
+  auto length = 42;
+  auto offset = length - 1;
   // Start the response.
   handler->expectEOM([&]() {
     handler->txn_->setTransportCallback(&transportCallback_);
-    handler->sendHeaders(200, 42);
-    auto res = handler->txn_->setBodyLastByteDeliveryTrackingEnabled(true);
-    EXPECT_TRUE(res);
-    handler->sendBody(42);
+    handler->sendHeaders(200, length);
+    EXPECT_TRUE(handler->txn_->trackEgressBodyOffset(
+        offset, ByteEvent::EventFlags::TX | ByteEvent::EventFlags::ACK));
+    handler->sendBody(length);
     // handler->sendEOM();
   });
 
   flushRequestsAndLoopN(1);
 
-  EXPECT_CALL(*handler, onError(_)).Times(1);
+  EXPECT_CALL(*handler, _onError(_)).Times(1);
   handler->expectDetachTransaction();
   socketDriver_->deliverErrorOnAllStreams(
-      std::make_pair(LocalErrorCode::INVALID_OPERATION, "fake error"));
+      quic::QuicError(LocalErrorCode::INVALID_OPERATION, "fake error"));
   flushRequestsAndLoop();
 
-  EXPECT_EQ(transportCallback_.numBodyBytesCanceledCalls_, 1);
-  EXPECT_EQ(transportCallback_.bodyBytesCanceledOffset_, 41);
+  EXPECT_EQ(transportCallback_.numBodyBytesCanceledCalls_, 2);
+  EXPECT_EQ(transportCallback_.bodyBytesCanceledOffset_, offset);
 }
 
 INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,

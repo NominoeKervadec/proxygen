@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -56,7 +56,6 @@ extern const std::string kH3;
 extern const std::string kHQ;
 extern const std::string kH3FBCurrentDraft;
 extern const std::string kH3CurrentDraft;
-extern const std::string kH3LegacyDraft;
 extern const std::string kHQCurrentDraft;
 
 // Default Priority Node
@@ -129,11 +128,13 @@ struct QuicStreamProtocolInfo : public QuicProtocolInfo {
 };
 
 class HQSession
-    : public quic::QuicSocket::ConnectionCallback
+    : public quic::QuicSocket::ConnectionSetupCallback
+    , public quic::QuicSocket::ConnectionCallbackNew
     , public quic::QuicSocket::ReadCallback
     , public quic::QuicSocket::WriteCallback
     , public quic::QuicSocket::DeliveryCallback
     , public quic::QuicSocket::DatagramCallback
+    , public quic::QuicSocket::PingCallback
     , public HTTPSessionBase
     , public folly::EventBase::LoopCallback
     , public HQUnidirStreamDispatcher::Callback {
@@ -187,8 +188,7 @@ class HQSession
     /**
      * Terminal callback.
      */
-    virtual void connectError(
-        std::pair<quic::QuicErrorCode, std::string> code) = 0;
+    virtual void connectError(quic::QuicError code) = 0;
 
     /**
      * Callback for the first time transport has processed a packet from peer.
@@ -232,11 +232,11 @@ class HQSession
 
   void onConnectionEnd() noexcept override;
 
-  void onConnectionSetupError(
-      std::pair<quic::QuicErrorCode, std::string> code) noexcept override;
+  void onConnectionEnd(quic::QuicError error) noexcept override;
 
-  void onConnectionError(
-      std::pair<quic::QuicErrorCode, std::string> code) noexcept override;
+  void onConnectionSetupError(quic::QuicError code) noexcept override;
+
+  void onConnectionError(quic::QuicError code) noexcept override;
 
   void onKnob(uint64_t knobSpace, uint64_t knobId, quic::Buf knobBlob) override;
 
@@ -250,20 +250,24 @@ class HQSession
   // quic::QuicSocket::ReadCallback
   void readAvailable(quic::StreamId id) noexcept override;
 
-  void readError(
-      quic::StreamId id,
-      std::pair<quic::QuicErrorCode, folly::Optional<folly::StringPiece>>
-          error) noexcept override;
+  void readError(quic::StreamId id, quic::QuicError error) noexcept override;
 
   // quic::QuicSocket::WriteCallback
   void onConnectionWriteReady(uint64_t maxToSend) noexcept override;
 
-  void onConnectionWriteError(
-      std::pair<quic::QuicErrorCode, folly::Optional<folly::StringPiece>>
-          error) noexcept override;
+  void onConnectionWriteError(quic::QuicError error) noexcept override;
 
   // quic::QuicSocket::DatagramCallback
   void onDatagramsAvailable() noexcept override;
+
+  // quic::QuicSocket::PingCallback
+  void pingAcknowledged() noexcept override {
+  }
+  void pingTimeout() noexcept override {
+  }
+  void onPing() noexcept override {
+    resetTimeout();
+  }
 
   // Only for UpstreamSession
   HTTPTransaction* newTransaction(HTTPTransaction::Handler* handler) override;
@@ -392,7 +396,7 @@ class HQSession
    * the number of bytes written on the transport to send the ping.
    */
   size_t sendPing() override {
-    sock_->sendPing(nullptr, std::chrono::milliseconds(0));
+    sock_->sendPing(std::chrono::milliseconds(0));
     return 0;
   }
 
@@ -454,8 +458,6 @@ class HQSession
   void dumpConnectionState(uint8_t /*loglevel*/) override {
   }
 
-  virtual void injectTraceEventIntoAllTransactions(TraceEvent& event) override;
-
   /*
    * dropConnectionSync drops the connection immediately.
    * This means that when invoked internally may need a destructor guard and
@@ -465,13 +467,12 @@ class HQSession
    *
    * proxygenError is delivered to open transactions
    */
-  void dropConnectionSync(std::pair<quic::QuicErrorCode, std::string> errorCode,
+  void dropConnectionSync(quic::QuicError errorCode,
                           ProxygenError proxygenError);
 
   // Invokes dropConnectionSync at the beginning of the next loopCallback
-  void dropConnectionAsync(
-      std::pair<quic::QuicErrorCode, std::string> errorCode,
-      ProxygenError proxygenError);
+  void dropConnectionAsync(quic::QuicError errorCode,
+                           ProxygenError proxygenError);
 
   bool getCurrentTransportInfoWithoutUpdate(
       wangle::TransportInfo* /*tinfo*/) const override;
@@ -697,10 +698,7 @@ class HQSession
             HTTPSessionController* controller,
             proxygen::TransportDirection direction,
             const wangle::TransportInfo& tinfo,
-            InfoCallback* sessionInfoCb,
-            folly::Function<void(HTTPCodecFilterChain& chain)>
-            /* codecFilterCallbackFn */
-            = nullptr)
+            InfoCallback* sessionInfoCb)
       : HTTPSessionBase(folly::SocketAddress(),
                         folly::SocketAddress(),
                         controller,
@@ -743,8 +741,11 @@ class HQSession
   virtual void setupOnHeadersComplete(HTTPTransaction* txn,
                                       HTTPMessage* msg) = 0;
 
-  virtual void onConnectionErrorHandler(
-      std::pair<quic::QuicErrorCode, std::string> error) noexcept = 0;
+  /**
+   * Executed on connection setup failure.
+   */
+  virtual void onConnectionSetupErrorHandler(
+      quic::QuicError error) noexcept = 0;
 
   void applySettings(const SettingsList& settings);
 
@@ -978,9 +979,7 @@ class HQSession
   bool started_ : 1;
   bool dropping_ : 1;
   bool inLoopCallback_ : 1;
-  folly::Optional<
-      std::pair<std::pair<quic::QuicErrorCode, std::string>, ProxygenError>>
-      dropInNextLoop_;
+  folly::Optional<std::pair<quic::QuicError, ProxygenError>> dropInNextLoop_;
 
 #ifdef _MSC_VER
 #pragma warning(push)
@@ -1099,7 +1098,7 @@ class HQSession
       : public HQStreamBase
       , public HTTPTransaction::Transport
       , public HTTP2PriorityQueueBase
-      , public quic::QuicSocket::DeliveryCallback {
+      , public quic::QuicSocket::ByteEventCallback {
    protected:
     HQStreamTransportBase(
         HQSession& session,
@@ -1140,11 +1139,9 @@ class HQSession
         const folly::Range<quic::QuicSocket::PeekIterator>& peekData);
 
     // QuicSocket::DeliveryCallback
-    void onDeliveryAck(quic::StreamId id,
-                       uint64_t offset,
-                       std::chrono::microseconds rtt) override;
-
-    void onCanceled(quic::StreamId id, uint64_t offset) override;
+    void onByteEvent(quic::QuicSocket::ByteEvent byteEvent) override;
+    void onByteEventCanceled(
+        quic::QuicSocket::ByteEventCancellation cancellation) override;
 
     // HTTPCodec::Callback methods
     void onMessageBegin(HTTPCodec::StreamID streamID,
@@ -1525,7 +1522,8 @@ class HQSession
 
     void generateGoaway();
 
-    void trackEgressBodyDelivery(uint64_t bodyOffset) override;
+    void trackEgressBodyOffset(uint64_t bodyOffset,
+                               proxygen::ByteEvent::EventFlags flags) override;
 
     /**
      * Returns whether or no we have any body bytes buffered in the stream, or
@@ -1704,14 +1702,28 @@ class HQSession
     // remote entity.
     HTTPTransaction::BufferMeta bufMeta_;
 
-    void armStreamAckCb(uint64_t streamOffset);
+    void armStreamByteEventCb(uint64_t streamOffset,
+                              quic::QuicSocket::ByteEvent::Type type);
     void armEgressHeadersAckCb(uint64_t streamOffset);
-    void armEgressBodyAckCb(uint64_t streamOffset);
+    void armEgressBodyCallbacks(uint64_t bodyOffset,
+                                uint64_t streamOffset,
+                                proxygen::ByteEvent::EventFlags eventFlags);
     void resetEgressHeadersAckOffset() {
       egressHeadersAckOffset_ = folly::none;
     }
-    void resetEgressBodyAckOffset(uint64_t offset) {
-      egressBodyAckOffsets_.erase(offset);
+    folly::Optional<uint64_t> resetEgressBodyEventOffset(
+        uint64_t streamOffset) {
+      auto it = egressBodyByteEventOffsets_.find(streamOffset);
+      if (it != egressBodyByteEventOffsets_.end()) {
+        CHECK_GT(it->second.callbacks, 0);
+        it->second.callbacks--;
+        auto bodyOffset = it->second.bodyOffset;
+        if (it->second.callbacks == 0) {
+          egressBodyByteEventOffsets_.erase(it);
+        }
+        return bodyOffset;
+      }
+      return folly::none;
     }
 
     uint64_t numActiveDeliveryCallbacks() const {
@@ -1729,14 +1741,21 @@ class HQSession
         HTTPHeaderSize* size) noexcept;
     void coalesceEOM(size_t encodedBodySize);
     void handleHeadersAcked(uint64_t streamOffset);
-    void handleBodyAcked(uint64_t streamOffset);
-    void handleBodyCancelled(uint64_t streamOffset);
-    // Egress headers offset.
-    // This is updated every time we send headers. Needed for body delivery
-    // callbacks to calculate body offset properly.
-    uint64_t egressHeadersStreamOffset_{0};
+    void handleBodyEvent(uint64_t streamOffset,
+                         quic::QuicSocket::ByteEvent::Type type);
+    void handleBodyEventCancelled(uint64_t streamOffset,
+                                  quic::QuicSocket::ByteEvent::Type type);
+    uint64_t bodyBytesEgressed_{0};
     folly::Optional<uint64_t> egressHeadersAckOffset_;
-    std::unordered_set<uint64_t> egressBodyAckOffsets_;
+    struct BodyByteOffset {
+      uint64_t bodyOffset;
+      uint64_t callbacks;
+      BodyByteOffset(uint64_t bo, uint64_t c) : bodyOffset(bo), callbacks(c) {
+      }
+    };
+    // We allow random insert/removal in this map, but removal should be
+    // sequential
+    folly::F14FastMap<uint64_t, BodyByteOffset> egressBodyByteEventOffsets_;
     // Track number of armed QUIC delivery callbacks.
     uint64_t numActiveDeliveryCallbacks_{0};
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -13,11 +13,9 @@
 #include <folly/portability/GTest.h>
 
 using namespace proxygen;
-using namespace proxygen::hq;
 using namespace quic;
 using namespace folly;
 using namespace testing;
-using namespace std::chrono;
 
 void H3DatagramAsyncSocketTest::SetUp() {
   // Create the socket
@@ -41,7 +39,8 @@ void H3DatagramAsyncSocketTest::SetUp() {
 
   socketDriver_ = std::make_unique<MockQuicSocketDriver>(
       &eventBase_,
-      *session_,
+      session_,
+      session_,
       MockQuicSocketDriver::TransportEnum::CLIENT,
       "h3");
   socketDriver_->setMaxUniStreams(3);
@@ -99,7 +98,7 @@ TEST_F(H3DatagramAsyncSocketTest, ConnectAndReady) {
 
 TEST_F(H3DatagramAsyncSocketTest, ConnectErrorBeforeReadCallbackSet) {
   datagramSocket_->connect(getRemoteAddress());
-  connectError(std::make_pair(LocalErrorCode::CONNECT_FAILED, "unreachable"));
+  connectError(quic::QuicError(LocalErrorCode::CONNECT_FAILED, "unreachable"));
   EXPECT_CALL(readCallbacks_, onReadError_(_))
       .Times(1)
       .WillOnce(Invoke([&](auto err) {
@@ -124,7 +123,7 @@ TEST_F(H3DatagramAsyncSocketTest, ConnectErrorAfterReadCallbackSet) {
       }));
   EXPECT_CALL(readCallbacks_, onReadClosed_()).Times(1);
   datagramSocket_->resumeRead(&readCallbacks_);
-  connectError(std::make_pair(LocalErrorCode::CONNECT_FAILED, "unreachable"));
+  connectError(quic::QuicError(LocalErrorCode::CONNECT_FAILED, "unreachable"));
 }
 
 TEST_F(H3DatagramAsyncSocketTest, HTTPNon200Response) {

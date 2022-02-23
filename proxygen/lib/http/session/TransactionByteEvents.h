@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -23,7 +23,7 @@ class TransactionByteEvent : public ByteEvent {
     txn_->incrementPendingByteEvents();
   }
 
-  ~TransactionByteEvent() {
+  ~TransactionByteEvent() override {
     txn_->decrementPendingByteEvents();
   }
 

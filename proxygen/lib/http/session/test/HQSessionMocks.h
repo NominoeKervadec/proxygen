@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -301,7 +301,7 @@ class MockConnectCallback : public HQSession::ConnectCallback {
  public:
   MOCK_METHOD0(connectSuccess, void());
   MOCK_METHOD0(onReplaySafe, void());
-  MOCK_METHOD1(connectError, void(std::pair<quic::QuicErrorCode, std::string>));
+  MOCK_METHOD1(connectError, void(quic::QuicError));
   MOCK_METHOD0(onFirstPeerPacketProcessed, void());
 };
 
@@ -389,11 +389,15 @@ class MockHQSession : public HQSession {
 
   MOCK_METHOD2(setupOnHeadersComplete, void(HTTPTransaction*, HTTPMessage*));
 
-  GMOCK_METHOD1_(,
-                 noexcept,
-                 ,
-                 onConnectionErrorHandler,
-                 void(std::pair<quic::QuicErrorCode, std::string> error));
+#if defined(MOCK_METHOD)
+  MOCK_METHOD((void),
+              onConnectionSetupErrorHandler,
+              (quic::QuicError),
+              (noexcept));
+#else
+  GMOCK_METHOD1_(
+      , noexcept, , onConnectionSetupErrorHandler, void(quic::QuicError error));
+#endif
 
   MOCK_METHOD1(newTransaction, HTTPTransaction*(HTTPTransaction::Handler*));
 

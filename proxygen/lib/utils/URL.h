@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -25,12 +25,16 @@ class URL {
   enum class Mode { STRICT_COMPAT, STRICT };
   explicit URL(folly::StringPiece url,
                bool secure = false,
+               Mode strict = Mode::STRICT_COMPAT) noexcept
+      : URL(ParseURL::parseURLMaybeInvalid(url, strict == Mode::STRICT),
+            secure,
+            strict) {
+  }
+
+  explicit URL(ParseURL parseUrl,
+               bool secure = false,
                Mode strict = Mode::STRICT_COMPAT) noexcept {
     valid_ = false;
-
-    ParseURL parseUrl =
-        ParseURL::parseURLMaybeInvalid(url, strict == Mode::STRICT);
-
     scheme_ = parseUrl.scheme().str();
     host_ = parseUrl.hostNoBrackets().str();
     path_ = parseUrl.path().str();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -17,10 +17,7 @@ class HQDownstreamSession : public HQSession {
   HQDownstreamSession(const std::chrono::milliseconds transactionsTimeout,
                       HTTPSessionController* controller,
                       const wangle::TransportInfo& tinfo,
-                      InfoCallback* sessionInfoCb,
-                      folly::Function<void(HTTPCodecFilterChain& chain)>
-                      /* codecFilterCallbackFn */
-                      = nullptr)
+                      InfoCallback* sessionInfoCb)
       : HQSession(transactionsTimeout,
                   controller,
                   proxygen::TransportDirection::DOWNSTREAM,
@@ -40,8 +37,7 @@ class HQDownstreamSession : public HQSession {
 
   void setupOnHeadersComplete(HTTPTransaction* txn, HTTPMessage* msg) override;
 
-  void onConnectionErrorHandler(
-      std::pair<quic::QuicErrorCode, std::string>) noexcept override;
+  void onConnectionSetupErrorHandler(quic::QuicError) noexcept override;
 
   bool isDetachable(bool) const override;
 

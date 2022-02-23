@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -669,7 +669,7 @@ TEST_F(HQCodecTest, MultipleSettingsDownstream) {
             HTTP3::ErrorCode::HTTP_FRAME_UNEXPECTED);
 }
 
-TEST_F(HQCodecTest, PriorityCallback) {
+TEST_F(HQCodecTest, RfcPriorityCallback) {
   // SETTINGS is a must have
   writeValidFrame(queueCtrl_, FrameType::SETTINGS);
   writeValidFrame(queueCtrl_, FrameType::PRIORITY_UPDATE);
@@ -678,10 +678,28 @@ TEST_F(HQCodecTest, PriorityCallback) {
   EXPECT_TRUE(callbacks_.incremental);
 }
 
-TEST_F(HQCodecTest, PushPriorityCallback) {
+TEST_F(HQCodecTest, RfcPushPriorityCallback) {
   // SETTINGS is a must have
   writeValidFrame(queueCtrl_, FrameType::SETTINGS);
   writeValidFrame(queueCtrl_, FrameType::PUSH_PRIORITY_UPDATE);
+  parseControl(CodecType::CONTROL_DOWNSTREAM);
+  EXPECT_EQ(1, callbacks_.urgency);
+  EXPECT_TRUE(callbacks_.incremental);
+}
+
+TEST_F(HQCodecTest, PriorityCallback) {
+  // SETTINGS is a must have
+  writeValidFrame(queueCtrl_, FrameType::SETTINGS);
+  writeValidFrame(queueCtrl_, FrameType::FB_PRIORITY_UPDATE);
+  parseControl(CodecType::CONTROL_DOWNSTREAM);
+  EXPECT_EQ(1, callbacks_.urgency);
+  EXPECT_TRUE(callbacks_.incremental);
+}
+
+TEST_F(HQCodecTest, PushPriorityCallback) {
+  // SETTINGS is a must have
+  writeValidFrame(queueCtrl_, FrameType::SETTINGS);
+  writeValidFrame(queueCtrl_, FrameType::FB_PUSH_PRIORITY_UPDATE);
   parseControl(CodecType::CONTROL_DOWNSTREAM);
   EXPECT_EQ(1, callbacks_.urgency);
   EXPECT_TRUE(callbacks_.incremental);
@@ -831,9 +849,15 @@ std::string frameParamsToTestName(
       testName += "MaxPushID";
       break;
     case FrameType::PRIORITY_UPDATE:
-      testName += "PriorityUpdate";
+      testName += "RfcPriorityUpdate";
       break;
     case FrameType::PUSH_PRIORITY_UPDATE:
+      testName += "RfcPushPriorityUpdate";
+      break;
+    case FrameType::FB_PRIORITY_UPDATE:
+      testName += "PriorityUpdate";
+      break;
+    case FrameType::FB_PUSH_PRIORITY_UPDATE:
       testName += "PushPriorityUpdate";
       break;
     default:
@@ -950,9 +974,13 @@ INSTANTIATE_TEST_CASE_P(
         (FrameAllowedParams){
             CodecType::DOWNSTREAM, FrameType::PUSH_PRIORITY_UPDATE, false},
         (FrameAllowedParams){
-            CodecType::UPSTREAM, FrameType::PRIORITY_UPDATE, false},
+            CodecType::DOWNSTREAM, FrameType::FB_PRIORITY_UPDATE, false},
         (FrameAllowedParams){
-            CodecType::UPSTREAM, FrameType::PUSH_PRIORITY_UPDATE, false},
+            CodecType::DOWNSTREAM, FrameType::FB_PUSH_PRIORITY_UPDATE, false},
+        (FrameAllowedParams){
+            CodecType::UPSTREAM, FrameType::FB_PRIORITY_UPDATE, false},
+        (FrameAllowedParams){
+            CodecType::UPSTREAM, FrameType::FB_PUSH_PRIORITY_UPDATE, false},
         // HQ Upstream Ingress Control Codec
         (FrameAllowedParams){
             CodecType::CONTROL_UPSTREAM, FrameType::DATA, false},
@@ -977,6 +1005,11 @@ INSTANTIATE_TEST_CASE_P(
         (FrameAllowedParams){CodecType::CONTROL_UPSTREAM,
                              FrameType::PUSH_PRIORITY_UPDATE,
                              false},
+        (FrameAllowedParams){
+            CodecType::CONTROL_UPSTREAM, FrameType::FB_PRIORITY_UPDATE, false},
+        (FrameAllowedParams){CodecType::CONTROL_UPSTREAM,
+                             FrameType::FB_PUSH_PRIORITY_UPDATE,
+                             false},
         // HQ Downstream Ingress Control Codec
         (FrameAllowedParams){
             CodecType::CONTROL_DOWNSTREAM, FrameType::DATA, false},
@@ -1000,6 +1033,11 @@ INSTANTIATE_TEST_CASE_P(
             CodecType::CONTROL_DOWNSTREAM, FrameType::PRIORITY_UPDATE, true},
         (FrameAllowedParams){CodecType::CONTROL_DOWNSTREAM,
                              FrameType::PUSH_PRIORITY_UPDATE,
+                             true},
+        (FrameAllowedParams){
+            CodecType::CONTROL_DOWNSTREAM, FrameType::FB_PRIORITY_UPDATE, true},
+        (FrameAllowedParams){CodecType::CONTROL_DOWNSTREAM,
+                             FrameType::FB_PUSH_PRIORITY_UPDATE,
                              true}),
     frameParamsToTestName);
 

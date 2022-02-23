@@ -1,4 +1,4 @@
-# Copyright (c) Facebook, Inc. and its affiliates.
+# Copyright (c) Meta Platforms, Inc. and affiliates.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -124,9 +124,12 @@ endif()
 if (BUILD_QUIC AND BUILD_SAMPLES)
   add_library(hq
       samples/hq/FizzContext.cpp
+      samples/hq/H2Server.cpp
       samples/hq/HQClient.cpp
+      samples/hq/HQCommandLine.cpp
       samples/hq/HQLoggerHelper.cpp
       samples/hq/HQServer.cpp
+      samples/hq/HQServerModule.cpp
       samples/hq/HQParams.cpp
       samples/hq/SampleHandlers.cpp
   )

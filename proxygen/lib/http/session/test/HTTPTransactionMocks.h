@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -338,6 +338,8 @@ class MockHTTPTransactionTransport : public HTTPTransaction::Transport {
     return const_cast<MockHTTPTransactionTransport*>(this)
         ->getDatagramSizeLimitNonConst();
   }
+
+  MOCK_METHOD2(trackEgressBodyOffset, void(uint64_t, ByteEvent::EventFlags));
 
   MockHTTPCodec mockCodec_;
 };

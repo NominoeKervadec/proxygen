@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -141,7 +141,7 @@ uint32_t HTTPSession::getCertAuthSettingVal() {
   }
   auto fizzBase = getTransport()->getUnderlyingTransport<AsyncFizzBase>();
   if (fizzBase) {
-    ekm = fizzBase->getEkm(label, nullptr, settingLen);
+    ekm = fizzBase->getExportedKeyingMaterial(label, nullptr, settingLen);
   } else {
     VLOG(4) << "Underlying transport does not support secondary "
                "authentication.";
@@ -167,7 +167,7 @@ bool HTTPSession::verifyCertAuthSetting(uint32_t value) {
   }
   auto fizzBase = getTransport()->getUnderlyingTransport<AsyncFizzBase>();
   if (fizzBase) {
-    ekm = fizzBase->getEkm(label, nullptr, settingLen);
+    ekm = fizzBase->getExportedKeyingMaterial(label, nullptr, settingLen);
   } else {
     VLOG(4) << "Underlying transport does not support secondary "
                "authentication.";
@@ -2075,8 +2075,7 @@ unique_ptr<IOBuf> HTTPSession::getNextToSend(bool* cork,
       }
       toSend = std::min(toSend, connFlowControl_->getAvailableSend());
     }
-    txnEgressQueue_.nextEgress(nextEgressResults_,
-                               isSpdyCodecProtocol(codec_->getProtocol()));
+    txnEgressQueue_.nextEgress(nextEgressResults_, false);
     CHECK(!nextEgressResults_.empty()); // Queue was non empty, so this must be
     // The maximum we will send for any transaction in this loop
     uint32_t txnMaxToSend = toSend * nextEgressResults_.front().second;
@@ -2271,7 +2270,8 @@ void HTTPSession::updateWriteCount() {
 
 void HTTPSession::shutdownTransport(bool shutdownReads,
                                     bool shutdownWrites,
-                                    const std::string& errorMsg) {
+                                    const std::string& errorMsg,
+                                    ProxygenError error) {
   DestructorGuard guard(this);
 
   // shutdowns not accounted for, shouldn't see any
@@ -2284,7 +2284,6 @@ void HTTPSession::shutdownTransport(bool shutdownReads,
   bool notifyEgressShutdown = false;
   bool notifyIngressShutdown = false;
 
-  ProxygenError error;
   if (!transportInfo_.sslError.empty()) {
     error = kErrorSSL;
   } else if (sock_->error()) {
@@ -2298,8 +2297,6 @@ void HTTPSession::shutdownTransport(bool shutdownReads,
     shutdownWrites = true;
   } else if (getConnectionCloseReason() == ConnectionCloseReason::TIMEOUT) {
     error = kErrorTimeout;
-  } else {
-    error = kErrorEOF;
   }
 
   if (shutdownReads && !shutdownWrites && flowControlTimeout_.isScheduled()) {
@@ -2342,7 +2339,7 @@ void HTTPSession::shutdownTransport(bool shutdownReads,
     // TODO: send an RST if readBuf_ is non empty?
     shutdownRead();
     if (!transactions_.empty() && error == kErrorConnectionReset) {
-      if (infoCallback_ != nullptr) {
+      if (infoCallback_) {
         infoCallback_->onIngressError(*this, error);
       }
     } else if (error == kErrorEOF) {
@@ -2847,7 +2844,11 @@ void HTTPSession::onSessionParseError(const HTTPException& error) {
     dropConnection();
   } else {
     setCloseReason(ConnectionCloseReason::SESSION_PARSE_ERROR);
-    shutdownTransport(true, true);
+    shutdownTransport(true,
+                      true,
+                      "",
+                      error.hasProxygenError() ? error.getProxygenError()
+                                               : kErrorMalformedInput);
   }
 }
 
@@ -3067,16 +3068,6 @@ void HTTPSession::invokeOnAllTransactions(
       fn(txn);
     }
   }
-}
-
-void HTTPSession::injectTraceEventIntoAllTransactions(TraceEvent& event) {
-  invokeOnAllTransactions([event](HTTPTransaction* txn) mutable {
-    HTTPTransactionHandler* handler = txn->getHandler();
-    if (handler != nullptr) {
-      ;
-      handler->traceEventAvailable(event);
-    }
-  });
 }
 
 } // namespace proxygen

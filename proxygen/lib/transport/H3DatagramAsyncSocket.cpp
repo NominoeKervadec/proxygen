@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -74,10 +74,9 @@ void H3DatagramAsyncSocket::connectSuccess() {
 void H3DatagramAsyncSocket::onReplaySafe() {
 }
 
-void H3DatagramAsyncSocket::connectError(
-    std::pair<quic::QuicErrorCode, std::string> error) {
+void H3DatagramAsyncSocket::connectError(quic::QuicError error) {
   closeWithError({AsyncSocketException::NETWORK_ERROR,
-                  fmt::format("connectError: '{}'", error.second)});
+                  fmt::format("connectError: '{}'", error.message)});
 }
 
 void H3DatagramAsyncSocket::setTransaction(
@@ -216,7 +215,7 @@ void H3DatagramAsyncSocket::startClient() {
 
     VLOG(4) << "connecting to " << connectAddress_.describe();
     upstreamSession_->startNow();
-    client->start(upstreamSession_);
+    client->start(upstreamSession_, upstreamSession_);
   }
 }
 

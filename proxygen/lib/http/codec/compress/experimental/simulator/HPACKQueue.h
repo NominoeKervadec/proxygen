@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -73,11 +73,11 @@ class HPACKQueue : public folly::DestructorCheck {
     }
   }
 
-  uint64_t getHolBlockCount() const {
+  [[nodiscard]] uint64_t getHolBlockCount() const {
     return holBlockCount_;
   }
 
-  uint64_t getQueuedBytes() const {
+  [[nodiscard]] uint64_t getQueuedBytes() const {
     return queuedBytes_;
   }
 

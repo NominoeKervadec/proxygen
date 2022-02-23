@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -20,6 +20,8 @@ namespace proxygen {
 Sampling::Sampling(double rate) {
   updateRate(rate);
 }
+
+Sampling::~Sampling() = default;
 
 void Sampling::updateRate(double rate) {
   CHECK(rate >= 0.0 && rate <= 1.0);

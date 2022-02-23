@@ -1,5 +1,5 @@
 /*
- * Copyright (c) Facebook, Inc. and its affiliates.
+ * Copyright (c) Meta Platforms, Inc. and affiliates.
  * All rights reserved.
  *
  * This source code is licensed under the BSD-style license found in the
@@ -8,8 +8,8 @@
 
 #pragma once
 
-#include "proxygen/lib/stats/PeriodicStats.h"
-#include "proxygen/lib/stats/ResourceData.h"
+#include <proxygen/lib/stats/PeriodicStats.h>
+#include <proxygen/lib/stats/ResourceData.h>
 
 namespace proxygen {
 

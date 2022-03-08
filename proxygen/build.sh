@@ -234,7 +234,9 @@ function setup_folly() {
     MAYBE_USE_STATIC_BOOST="-DBOOST_LINK_STATIC=ON"
     MAYBE_BUILD_SHARED_LIBS="-DBUILD_SHARED_LIBS=OFF"
   fi
-
+  if [ "$BOOST_ROOT" != "" ]; then
+   MAYBE_USE_STATIC_BOOST="-DBOOST_LINK_STATIC=ON"
+  fi
   cmake                                           \
     -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
     -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"            \

@@ -2521,9 +2521,7 @@ void HQSession::detachStreamTransport(HQStreamTransportBase* hqStream) {
     eraseUnboundStream(hqStream);
   }
 
-  // If there are no established streams left, close the connection
   if (getNumStreams() == 0) {
-    cleanupPendingStreams();
     if (infoCallback_) {
       infoCallback_->onDeactivateConnection(*this);
     }
@@ -2911,8 +2909,9 @@ bool HQSession::HQStreamTransportBase::sendHeadersWithDelegate(
                << ": HQSession received delegate request without a QuicSocket";
     return false;
   }
-  auto quicDSRSenderRawPtr =
-      dynamic_cast<quic::DSRPacketizationRequestSender*>(dsrSender.get());
+  auto dsrRequestSenderRawPtr = CHECK_NOTNULL(dsrSender.get());
+  auto quicDSRSenderRawPtr = dynamic_cast<quic::DSRPacketizationRequestSender*>(
+      dsrRequestSenderRawPtr);
   if (!quicDSRSenderRawPtr) {
     LOG(ERROR) << __func__ << ": The passed in DSRSender is of wrong type";
     return false;
@@ -2936,6 +2935,7 @@ bool HQSession::HQStreamTransportBase::sendHeadersWithDelegate(
   }
   *dataFrameHeaderSize = *writeFrameHeaderResult;
   notifyPendingEgress();
+  dsrRequestSenderRawPtr->onHeaderBytesGenerated(streamWriteByteOffset());
   return true;
 }
 

@@ -22,6 +22,8 @@ class DummyHTTPSessionStats : public HTTPSessionStats {
   // virtual void recordSessionIdleTime(std::chrono::seconds) noexcept {};
   void recordTransactionStalled() noexcept override{};
   void recordSessionStalled() noexcept override{};
+  void recordEgressContentLengthMismatches() noexcept override {
+  }
 
   void recordPresendIOSplit() noexcept override{};
   void recordPresendExceedLimit() noexcept override{};
@@ -44,35 +46,39 @@ class MockHTTPSessionStats : public DummyHTTPSessionStats {
   void recordTransactionOpened() noexcept override {
     _recordTransactionOpened();
   }
-  MOCK_METHOD0(_recordTransactionOpened, void());
+  MOCK_METHOD(void, _recordTransactionOpened, ());
   void recordTransactionClosed() noexcept override {
     _recordTransactionClosed();
   }
-  MOCK_METHOD0(_recordTransactionClosed, void());
+  MOCK_METHOD(void, _recordTransactionClosed, ());
   void recordTransactionsServed(uint64_t num) noexcept override {
     _recordTransactionsServed(num);
   }
-  MOCK_METHOD1(_recordTransactionsServed, void(uint64_t));
+  MOCK_METHOD(void, _recordTransactionsServed, (uint64_t));
   void recordSessionReused() noexcept override {
     _recordSessionReused();
   }
-  MOCK_METHOD0(_recordSessionReused, void());
+  MOCK_METHOD(void, _recordSessionReused, ());
   void recordSessionIdleTime(std::chrono::seconds param) noexcept override {
     _recordSessionIdleTime(param);
   }
-  MOCK_METHOD1(_recordSessionIdleTime, void(std::chrono::seconds));
+  MOCK_METHOD(void, _recordSessionIdleTime, (std::chrono::seconds));
   void recordTransactionStalled() noexcept override {
     _recordTransactionStalled();
   }
-  MOCK_METHOD0(_recordTransactionStalled, void());
+  MOCK_METHOD(void, _recordTransactionStalled, ());
   void recordSessionStalled() noexcept override {
     _recordSessionStalled();
   }
-  MOCK_METHOD0(_recordSessionStalled, void());
+  MOCK_METHOD(void, _recordSessionStalled, ());
+  void recordEgressContentLengthMismatches() noexcept override {
+    _recordEgressContentLengthMismatches();
+  }
+  MOCK_METHOD(void, _recordEgressContentLengthMismatches, ());
   void recordPendingBufferedReadBytes(int64_t num) noexcept override {
     _recordPendingBufferedReadBytes(num);
   }
-  MOCK_METHOD1(_recordPendingBufferedReadBytes, void(int64_t));
+  MOCK_METHOD(void, _recordPendingBufferedReadBytes, (int64_t));
 };
 
 } // namespace proxygen

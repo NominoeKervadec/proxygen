@@ -2319,6 +2319,52 @@ TEST_P(HQDownstreamSessionTestHQ, DelayedQPACKStopSendingReset) {
   hqSession_->closeWhenIdle();
 }
 
+using ControlStreamsStallTest = HQDownstreamSessionBeforeTransportReadyTest;
+
+TEST_P(ControlStreamsStallTest, StalledQpackStream) {
+  // This test does not pre-setup any control streams for a reason.
+  // We want to be able to control unidirectional (QPACK) stream lifetime to
+  // perform the test.
+
+  QuicConnectionStateBase state(quic::QuicNodeType::Server);
+  EXPECT_CALL(*(socketDriver_->sock_), getState())
+      .WillRepeatedly(testing::Invoke(
+          [&state]() -> QuicConnectionStateBase* { return &state; }));
+
+  // Get a request going.
+  auto req = getGetRequest();
+  req.getHeaders().add("X-FB-Debug", "rfccffgvtvnenjkbtitkfdufddnvbecu");
+  auto id = sendRequest(req);
+
+  // Add data to the control stream 6 with fake stream offset 42.
+  // This is to ensure unidirectional stream dispatcher in session does not
+  // instantiate an actual full blown control stream object, but only create a
+  // pending tmp stream placeholder and attach a peek callback to it to wait for
+  // the preface.
+  std::array<uint8_t, 1> data1{0b00100111};
+  auto buf1 = folly::IOBuf::copyBuffer(data1.data(), data1.size());
+  socketDriver_->addReadEvent(6, std::move(buf1), milliseconds(0), 42);
+
+  // Let the sesion roll.
+  hqSession_->onTransportReady();
+
+  // Now cancel the request we queded up in the beginning.
+  socketDriver_->addStopSending(id, HTTP3::ErrorCode::HTTP_REQUEST_CANCELLED);
+  socketDriver_->addReadError(id,
+                              HTTP3::ErrorCode::HTTP_REQUEST_CANCELLED,
+                              std::chrono::milliseconds(0));
+
+  // Roll the event base. Once session loops, the expectation is that the
+  // pending control stream is alive and well and has its peek callback
+  // attached.
+  flushRequestsAndLoopN(1);
+
+  EXPECT_NE(socketDriver_->streams_[6].peekCB, nullptr);
+
+  // Close the session; all good.
+  hqSession_->closeWhenIdle();
+}
+
 TEST_P(HQDownstreamSessionTestHQ, QPACKHeadersTooLarge) {
   hqSession_->setEgressSettings({{SettingsId::MAX_HEADER_LIST_SIZE, 60}});
   auto req = getGetRequest();
@@ -2414,15 +2460,15 @@ TEST_P(HQDownstreamSessionTest, ProcessReadDataOnDetachedStream) {
 
 // Test Cases for which Settings are not sent in the test SetUp
 using HQDownstreamSessionTestHQNoSettings = HQDownstreamSessionTest;
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionTestHQNoSettings,
-                        Values([] {
-                          TestParams tp;
-                          tp.alpn_ = "h3";
-                          tp.shouldSendSettings_ = false;
-                          return tp;
-                        }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTestHQNoSettings,
+                         Values([] {
+                           TestParams tp;
+                           tp.alpn_ = "h3";
+                           tp.shouldSendSettings_ = false;
+                           return tp;
+                         }()),
+                         paramsToTestName);
 TEST_P(HQDownstreamSessionTestHQNoSettings, SimpleGet) {
   auto idh = checkRequest();
   flushRequestsAndLoop();
@@ -2723,22 +2769,38 @@ TEST_P(HQDownstreamSessionTest, DelegateResponse) {
   handler->expectHeaders();
   auto dsrRequestSender = std::make_unique<MockQuicDSRRequestSender>();
   auto rawDsrSender = dsrRequestSender.get();
+  std::unique_ptr<quic::DSRPacketizationRequestSender> senderStorage;
   handler->expectEOM([&]() {
     handler->txn_->setTransportCallback(&transportCallback_);
+    auto mockDsrRequestSender =
+        dynamic_cast<MockDSRRequestSender*>(rawDsrSender);
+    CHECK(mockDsrRequestSender);
     EXPECT_CALL(*socketDriver_->getSocket(),
-                setDSRPacketizationRequestSenderRef(_, _))
+                setDSRPacketizationRequestSender(_, _))
         .Times(1)
         .WillOnce(Invoke(
             [&](StreamId,
-                const std::unique_ptr<quic::DSRPacketizationRequestSender>&
-                    sender) {
+                std::unique_ptr<quic::DSRPacketizationRequestSender> sender) {
               EXPECT_EQ(rawDsrSender, sender.get());
+              senderStorage = std::move(sender);
               return folly::unit;
             }));
+    folly::Optional<size_t> headerBytes;
+    EXPECT_CALL(*mockDsrRequestSender, onHeaderBytesGenerated(_))
+        .WillOnce(Invoke([&](auto bytes) {
+          handler->txn_->addBufferMeta();
+          handler->txn_->sendEOM();
+          headerBytes = bytes;
+        }));
     EXPECT_TRUE(handler->sendHeadersWithDelegate(
         200, 1000 * 20, std::move(dsrRequestSender)));
     EXPECT_GT(transportCallback_.bodyBytesGenerated_, 0);
     auto dataFrameHeaderSize = transportCallback_.bodyBytesGenerated_;
+    ASSERT_TRUE(headerBytes.hasValue());
+    // TODO is + 5 really the best way to encode this?
+    EXPECT_EQ(
+        *headerBytes,
+        dataFrameHeaderSize + transportCallback_.headerBytesGenerated_ + 5);
     EXPECT_TRUE(handler->txn_->isEgressStarted());
     handler->txn_->onWriteReady(10 * 1000, 1.0);
     EXPECT_EQ(transportCallback_.bodyBytesGenerated_,
@@ -2846,108 +2908,125 @@ TEST_P(HQDownstreamSessionTest, IdleTimeoutResetWithPing) {
             connIdleTimeout.count() * 2);
 }
 
+TEST_P(HQDownstreamSessionTest, IdleTimeoutResetWithPingAcknowledged) {
+  std::chrono::milliseconds connIdleTimeout{200};
+  auto connManager = wangle::ConnectionManager::makeUnique(
+      &eventBase_, connIdleTimeout, nullptr);
+  connManager->addConnection(hqSession_, true);
+  for (int i = 1; i <= 4; i++) {
+    socketDriver_->addPingAcknowledgedReadEvent(std::chrono::milliseconds(100));
+  }
+  // Just run the loop, the session will timeout, drain and close
+  auto start = std::chrono::steady_clock::now();
+  flushRequestsAndLoop();
+  auto end = std::chrono::steady_clock::now();
+  EXPECT_GE(std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+                .count(),
+            connIdleTimeout.count() * 2);
+}
+
 /**
  * Instantiate the Parametrized test cases
  */
 
 // Make sure all the tests keep working with all the supported protocol versions
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionTest,
-                        Values(
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h1q-fb";
-                              return tp;
-                            }(),
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h1q-fb-v2";
-                              return tp;
-                            }(),
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h3";
-                              return tp;
-                            }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTest,
+                         Values(
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h1q-fb";
+                               return tp;
+                             }(),
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h1q-fb-v2";
+                               return tp;
+                             }(),
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h3";
+                               return tp;
+                             }()),
+                         paramsToTestName);
 
 // Instantiate h1q only tests that work on all versions
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionTestH1q,
-                        Values(
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h1q-fb";
-                              return tp;
-                            }(),
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h1q-fb-v2";
-                              return tp;
-                            }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTestH1q,
+                         Values(
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h1q-fb";
+                               return tp;
+                             }(),
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h1q-fb-v2";
+                               return tp;
+                             }()),
+                         paramsToTestName);
 
 // Instantiate common tests for h1q-fb-v2 and hq (goaway)
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionTestH1qv2HQ,
-                        Values(
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h1q-fb-v2";
-                              return tp;
-                            }(),
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h3";
-                              return tp;
-                            }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTestH1qv2HQ,
+                         Values(
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h1q-fb-v2";
+                               return tp;
+                             }(),
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h3";
+                               return tp;
+                             }()),
+                         paramsToTestName);
 
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionFilterTestHQ,
-                        Values([] {
-                          TestParams tp;
-                          tp.alpn_ = "h3";
-                          tp.createQPACKStreams_ = true;
-                          tp.shouldSendSettings_ = false;
-                          return tp;
-                        }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionFilterTestHQ,
+                         Values([] {
+                           TestParams tp;
+                           tp.alpn_ = "h3";
+                           tp.createQPACKStreams_ = true;
+                           tp.shouldSendSettings_ = false;
+                           return tp;
+                         }()),
+                         paramsToTestName);
 
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionBeforeTransportReadyTest,
-                        HQDownstreamSessionBeforeTransportReadyTest,
-                        Values(
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h1q-fb-v2";
-                              return tp;
-                            }(),
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h3";
-                              return tp;
-                            }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionBeforeTransportReadyTest,
+                         HQDownstreamSessionBeforeTransportReadyTest,
+                         Values(
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h1q-fb-v2";
+                               return tp;
+                             }(),
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h3";
+                               return tp;
+                             }()),
+                         paramsToTestName);
 
 // Instantiate h1q-fb-v1 only tests
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionTestH1qv1,
-                        Values([] {
-                          TestParams tp;
-                          tp.alpn_ = "h1q-fb";
-                          return tp;
-                        }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTestH1qv1,
+                         Values([] {
+                           TestParams tp;
+                           tp.alpn_ = "h1q-fb";
+                           return tp;
+                         }()),
+                         paramsToTestName);
 
 // Instantiate hq only tests
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionTestHQ,
-                        Values([] {
-                          TestParams tp;
-                          tp.alpn_ = "h3";
-                          return tp;
-                        }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTestHQ,
+                         Values([] {
+                           TestParams tp;
+                           tp.alpn_ = "h3";
+                           return tp;
+                         }()),
+                         paramsToTestName);
 
 TEST_P(HQDownstreamSessionTestHQPush, SimplePush) {
   auto id = sendRequest("/", 1);
@@ -3111,40 +3190,50 @@ TEST_P(HQDownstreamSessionTestHQPush, StopSending) {
 using DropConnectionInTransportReadyTest =
     HQDownstreamSessionBeforeTransportReadyTest;
 
-INSTANTIATE_TEST_CASE_P(DropConnectionInTransportReadyTest,
-                        DropConnectionInTransportReadyTest,
-                        Values(
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "unsupported";
-                              tp.expectOnTransportReady = false;
-                              return tp;
-                            }(),
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h3";
-                              tp.unidirectionalStreamsCredit = 1;
-                              tp.expectOnTransportReady = false;
-                              return tp;
-                            }(),
-                            [] {
-                              TestParams tp;
-                              tp.alpn_ = "h1q-fb-v2";
-                              tp.unidirectionalStreamsCredit = 0;
-                              tp.expectOnTransportReady = false;
-                              return tp;
-                            }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(ControlStreamsStallTest,
+                         ControlStreamsStallTest,
+                         Values([] {
+                           TestParams tp;
+                           tp.alpn_ = "h3";
+                           tp.checkUniridStreamCallbacks = false;
+                           return tp;
+                         }()),
+                         paramsToTestName);
+
+INSTANTIATE_TEST_SUITE_P(DropConnectionInTransportReadyTest,
+                         DropConnectionInTransportReadyTest,
+                         Values(
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "unsupported";
+                               tp.expectOnTransportReady = false;
+                               return tp;
+                             }(),
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h3";
+                               tp.unidirectionalStreamsCredit = 1;
+                               tp.expectOnTransportReady = false;
+                               return tp;
+                             }(),
+                             [] {
+                               TestParams tp;
+                               tp.alpn_ = "h1q-fb-v2";
+                               tp.unidirectionalStreamsCredit = 0;
+                               tp.expectOnTransportReady = false;
+                               return tp;
+                             }()),
+                         paramsToTestName);
 // Instantiate hq server push tests
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionTestHQPush,
-                        Values([] {
-                          TestParams tp;
-                          tp.alpn_ = "h3";
-                          tp.unidirectionalStreamsCredit = 8;
-                          return tp;
-                        }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTestHQPush,
+                         Values([] {
+                           TestParams tp;
+                           tp.alpn_ = "h3";
+                           tp.unidirectionalStreamsCredit = 8;
+                           return tp;
+                         }()),
+                         paramsToTestName);
 
 // Use this test class for mismatched alpn tests
 class HQDownstreamSessionTestUnsupportedAlpn : public HQDownstreamSessionTest {
@@ -3415,11 +3504,11 @@ TEST_P(HQDownstreamSessionTestHQDeliveryAck, TestBodyDeliveryCancel) {
   EXPECT_EQ(transportCallback_.bodyBytesCanceledOffset_, offset);
 }
 
-INSTANTIATE_TEST_CASE_P(HQDownstreamSessionTest,
-                        HQDownstreamSessionTestHQDeliveryAck,
-                        Values([] {
-                          TestParams tp;
-                          tp.alpn_ = "h3";
-                          return tp;
-                        }()),
-                        paramsToTestName);
+INSTANTIATE_TEST_SUITE_P(HQDownstreamSessionTest,
+                         HQDownstreamSessionTestHQDeliveryAck,
+                         Values([] {
+                           TestParams tp;
+                           tp.alpn_ = "h3";
+                           return tp;
+                         }()),
+                         paramsToTestName);

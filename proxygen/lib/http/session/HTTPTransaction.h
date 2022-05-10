@@ -41,8 +41,17 @@ namespace proxygen {
  *
  * A sender interface to send out DSR delegated packetization requests.
  */
-struct DSRRequestSender {
+class DSRRequestSender {
+ public:
   virtual ~DSRRequestSender() = default;
+
+  // This is called back when the underlying session has generated the header
+  // bytes for the transaction. At this point it is the responsibility of the
+  // DSRRequestSender to call addBufferMeta and sendEOM so that the buffer meta
+  // data can start flowing through the transport. The parameter is the offset
+  // at which the DSR data begins.
+  virtual void onHeaderBytesGenerated(size_t /*dsrDataStartingOffset*/) {
+  }
 };
 
 /**
@@ -492,7 +501,7 @@ class HTTPTransaction
                             bool /* eom */) noexcept = 0;
 
     virtual size_t sendBody(HTTPTransaction* txn,
-                            std::unique_ptr<folly::IOBuf>,
+                            std::unique_ptr<folly::IOBuf> iobuf,
                             bool eom,
                             bool trackLastByteFlushed) noexcept = 0;
 
@@ -684,10 +693,11 @@ class HTTPTransaction
   }
 
   std::tuple<uint64_t, uint64_t, double> getPrioritySummary() const {
-    return std::make_tuple(insertDepth_,
-                           currentDepth_,
-                           egressCalls_ > 0 ? cumulativeRatio_ / egressCalls_
-                                            : 0);
+    return std::make_tuple(
+        insertDepth_,
+        currentDepth_,
+        egressCalls_ > 0 ? cumulativeRatio_ / static_cast<double>(egressCalls_)
+                         : 0);
   }
 
   folly::Optional<HTTPPriority> getHTTPPriority() const {
@@ -1568,6 +1578,8 @@ class HTTPTransaction
     egressBufferLimit_ = limit;
   }
 
+  virtual bool addBufferMeta() noexcept;
+
  private:
   HTTPTransaction(const HTTPTransaction&) = delete;
   HTTPTransaction& operator=(const HTTPTransaction&) = delete;
@@ -1579,8 +1591,6 @@ class HTTPTransaction
 
   bool delegatedTransactionChecks(const HTTPMessage& headers) noexcept;
   bool delegatedTransactionChecks() noexcept;
-
-  bool addBufferMeta() noexcept;
 
   void abortAndDeliverError(ErrorCode codecErorr, const std::string& msg);
 

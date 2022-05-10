@@ -129,7 +129,7 @@ struct QuicStreamProtocolInfo : public QuicProtocolInfo {
 
 class HQSession
     : public quic::QuicSocket::ConnectionSetupCallback
-    , public quic::QuicSocket::ConnectionCallbackNew
+    , public quic::QuicSocket::ConnectionCallback
     , public quic::QuicSocket::ReadCallback
     , public quic::QuicSocket::WriteCallback
     , public quic::QuicSocket::DeliveryCallback
@@ -262,6 +262,7 @@ class HQSession
 
   // quic::QuicSocket::PingCallback
   void pingAcknowledged() noexcept override {
+    resetTimeout();
   }
   void pingTimeout() noexcept override {
   }
@@ -505,7 +506,7 @@ class HQSession
     return folly::none;
   }
 
-  quic::QuicSocket* getQuicSocket() const {
+  virtual quic::QuicSocket* getQuicSocket() const {
     return sock_.get();
   }
 

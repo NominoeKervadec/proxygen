@@ -92,6 +92,7 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
     uint64_t flowControlWindow{65536};
     bool isControl{false};
     uint64_t lastSkipOffset{0};
+    uint64_t fakePeekOffset{0};
   };
 
  public:
@@ -101,7 +102,7 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
   explicit MockQuicSocketDriver(
       folly::EventBase* eventBase,
       QuicSocket::ConnectionSetupCallback* connSetupCb,
-      QuicSocket::ConnectionCallbackNew* connCb,
+      QuicSocket::ConnectionCallback* connCb,
       TransportEnum transportType,
       std::string alpn = "h1q-fb")
       : eventBase_(eventBase),
@@ -122,9 +123,9 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
             testing::Invoke([this](QuicSocket::ConnectionSetupCallback* cb) {
               sock_->setupCb_ = cb;
             }));
-    EXPECT_CALL(*sock_, setConnectionCallbackNew(testing::_))
+    EXPECT_CALL(*sock_, setConnectionCallback(testing::_))
         .WillRepeatedly(
-            testing::Invoke([this](QuicSocket::ConnectionCallbackNew* cb) {
+            testing::Invoke([this](QuicSocket::ConnectionCallback* cb) {
               sock_->connCb_ = cb;
             }));
     EXPECT_CALL(*sock_, isClientStream(testing::_))
@@ -1191,12 +1192,35 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
                          true);
   }
 
+  void addPingAcknowledgedReadEvent(
+      std::chrono::milliseconds delayFromPrevious =
+          std::chrono::milliseconds(0)) {
+    addReadEventInternal(kConnectionStreamId,
+                         nullptr,
+                         false,
+                         folly::none,
+                         delayFromPrevious,
+                         false,
+                         false,
+                         false,
+                         true);
+  }
+
   void addReadEvent(StreamId streamId,
                     std::unique_ptr<folly::IOBuf> buf,
                     std::chrono::milliseconds delayFromPrevious =
-                        std::chrono::milliseconds(0)) {
-    addReadEventInternal(
-        streamId, std::move(buf), false, folly::none, delayFromPrevious);
+                        std::chrono::milliseconds(0),
+                    uint64_t fakePeekOffset = 0) {
+    addReadEventInternal(streamId,
+                         std::move(buf),
+                         false,
+                         folly::none,
+                         delayFromPrevious,
+                         false /* stopSending */,
+                         false /* datagramsAvailable */,
+                         false /* pingReceived */,
+                         false /* pingAcknowledged */,
+                         fakePeekOffset);
   }
 
   void addReadEvent(StreamId streamId,
@@ -1304,14 +1328,18 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
               folly::Optional<QuicErrorCode> er,
               bool ss,
               bool da = false,
-              bool pr = false)
+              bool pr = false,
+              bool pa = false,
+              uint64_t fpo = 0)
         : streamId(s),
           buf(std::move(b)),
           eof(e),
           error(er),
           stopSending(ss),
           datagramsAvailable(da),
-          pingReceived(pr) {
+          pingReceived(pr),
+          pingAcknowledged(pa),
+          fakePeekOffset(fpo) {
     }
 
     StreamId streamId;
@@ -1321,6 +1349,8 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
     bool stopSending;
     bool datagramsAvailable;
     bool pingReceived;
+    bool pingAcknowledged;
+    uint64_t fakePeekOffset;
   };
 
   void addReadEventInternal(StreamId streamId,
@@ -1331,7 +1361,9 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
                                 std::chrono::milliseconds(0),
                             bool stopSending = false,
                             bool datagramsAvailable = false,
-                            bool pingReceived = false) {
+                            bool pingReceived = false,
+                            bool pingAcknowledged = false,
+                            uint64_t fakePeekOffset = 0) {
     std::vector<ReadEvent> events;
     events.emplace_back(streamId,
                         std::move(buf),
@@ -1339,7 +1371,9 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
                         error,
                         stopSending,
                         datagramsAvailable,
-                        pingReceived);
+                        pingReceived,
+                        pingAcknowledged,
+                        fakePeekOffset);
     addReadEvents(std::move(events), delayFromPrevious);
   }
 
@@ -1365,6 +1399,9 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
           }
           for (auto& event : events) {
             auto& stream = streams_[event.streamId];
+            if (event.fakePeekOffset > 0) {
+              stream.fakePeekOffset = event.fakePeekOffset;
+            }
             if (!event.error) {
               ERROR_IF(stream.readState == CLOSED,
                        fmt::format("scheduling event on CLOSED streamId={}",
@@ -1385,6 +1422,11 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
             if (event.streamId == kConnectionStreamId && event.pingReceived &&
                 !event.error && pingCB_) {
               pingCB_->onPing();
+              continue;
+            }
+            if (event.streamId == kConnectionStreamId &&
+                event.pingAcknowledged && !event.error && pingCB_) {
+              pingCB_->pingAcknowledged();
               continue;
             }
             auto bufLen = event.buf ? event.buf->computeChainDataLength() : 0;
@@ -1429,8 +1471,11 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
                 std::deque<StreamBuffer> fakeReadBuffer;
                 stream.readBuf.gather(stream.readBuf.chainLength());
                 auto copyBuf = stream.readBuf.front()->clone();
-                fakeReadBuffer.emplace_back(
-                    std::move(copyBuf), stream.readOffset, stream.readEOF);
+                fakeReadBuffer.emplace_back(std::move(copyBuf),
+                                            stream.fakePeekOffset
+                                                ? stream.fakePeekOffset
+                                                : stream.readOffset,
+                                            stream.readEOF);
                 stream.peekCB->onDataAvailable(
                     event.streamId,
                     folly::Range<PeekIterator>(fakeReadBuffer.cbegin(),
@@ -1591,8 +1636,11 @@ class MockQuicSocketDriver : public folly::EventBase::LoopCallback {
                                copyBufLen,
                                it.first),
                    continue);
-          fakeReadBuffer.emplace_back(
-              std::move(copyBuf), it.second.readOffset, it.second.readEOF);
+          fakeReadBuffer.emplace_back(std::move(copyBuf),
+                                      it.second.fakePeekOffset
+                                          ? it.second.fakePeekOffset
+                                          : it.second.readOffset,
+                                      it.second.readEOF);
           it.second.peekCB->onDataAvailable(
               it.first,
               folly::Range<PeekIterator>(fakeReadBuffer.cbegin(),

@@ -1269,6 +1269,11 @@ TEST_F(HTTPDownstreamSessionTest, TestOnContentMismatch) {
   // is different from the actual length of the body.
   // The expectation is simply to log the behavior, such as:
   // ".. HTTPTransaction.cpp ] Content-Length/body mismatch: expected: .. "
+
+  NiceMock<MockHTTPSessionStats> stats;
+  httpSession_->setSessionStats(&stats);
+  EXPECT_CALL(stats, _recordEgressContentLengthMismatches()).Times(2);
+
   folly::EventBase base;
   InSequence enforceOrder;
   auto handler1 = addSimpleNiceHandler();
@@ -1872,7 +1877,7 @@ class OnTxnByteEventWrittenToBufTest
   }
 };
 
-INSTANTIATE_TEST_CASE_P(
+INSTANTIATE_TEST_SUITE_P(
     HTTPDownstreamSessionTest,
     OnTxnByteEventWrittenToBufTest,
     ::testing::ValuesIn(OnTxnByteEventWrittenToBufTest::getTestingValues()));
@@ -2815,7 +2820,7 @@ TEST_F(HTTP2DownstreamSessionTest, H2TimeoutWin) {
   cleanup();
 }
 
-TYPED_TEST_CASE_P(HTTPDownstreamTest);
+TYPED_TEST_SUITE_P(HTTPDownstreamTest);
 
 TYPED_TEST_P(HTTPDownstreamTest, TestMaxTxnOverriding) {
   this->httpSession_->setEgressSettings(
@@ -2982,16 +2987,16 @@ TEST_F(HTTP2DownstreamSessionTest, H2MaxConcurrentStreams) {
   flushRequestsAndLoop();
 }
 
-REGISTER_TYPED_TEST_CASE_P(HTTPDownstreamTest,
-                           TestWritesDraining,
-                           TestBodySizeLimit,
-                           TestMaxTxns,
-                           TestMaxTxnOverriding);
+REGISTER_TYPED_TEST_SUITE_P(HTTPDownstreamTest,
+                            TestWritesDraining,
+                            TestBodySizeLimit,
+                            TestMaxTxns,
+                            TestMaxTxnOverriding);
 
 using ParallelCodecs = ::testing::Types<HTTP2CodecPair>;
-INSTANTIATE_TYPED_TEST_CASE_P(ParallelCodecs,
-                              HTTPDownstreamTest,
-                              ParallelCodecs);
+INSTANTIATE_TYPED_TEST_SUITE_P(ParallelCodecs,
+                               HTTPDownstreamTest,
+                               ParallelCodecs);
 
 class HTTP2DownstreamSessionFCTest : public HTTPDownstreamTest<HTTP2CodecPair> {
  public:
@@ -4076,9 +4081,10 @@ TEST_F(HTTP2DownstreamSessionTest, TestHeadContentLength) {
 }
 
 TEST_F(HTTP2DownstreamSessionTest, Test304ContentLength) {
+  // This test covers egress, where we log, but don't fail or crash,
   InSequence enforceOrder;
   auto req = getGetRequest();
-  req.setMethod(HTTPMethod::HEAD);
+  req.setMethod(HTTPMethod::GET);
   sendRequest(req);
   auto handler1 = addSimpleStrictHandler();
 

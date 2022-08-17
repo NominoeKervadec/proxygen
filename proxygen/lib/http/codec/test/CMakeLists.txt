@@ -57,4 +57,13 @@ if (BUILD_QUIC)
       mvfst::mvfst_codec_types
       mvfst::mvfst_state_machine
   )
+
+  proxygen_add_test(TARGET BinaryCodecTests
+    SOURCES
+      HTTPBinaryCodecTest.cpp
+    DEPENDS
+      codectestutils
+      proxygen
+      testmain
+)
 endif()

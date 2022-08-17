@@ -518,6 +518,10 @@ class HTTPTransaction
 
     virtual size_t sendPriority(HTTPTransaction* txn,
                                 const http2::PriorityUpdate& pri) noexcept = 0;
+    /*
+     * Updates the Local priority for the transaction.
+     * For an upstream transaction it also sends the priority update to the peer
+     */
     virtual size_t changePriority(HTTPTransaction* txn,
                                   HTTPPriority pri) noexcept = 0;
 
@@ -1413,7 +1417,9 @@ class HTTPTransaction
    * Schedule or refresh the idle timeout for this transaction
    */
   void refreshTimeout() {
-    if (timer_ && hasIdleTimeout()) {
+    // TODO(T121147568): Remove the zero-check after the experiment is complete.
+    if (timer_ && hasIdleTimeout() &&
+        idleTimeout_.value() != std::chrono::milliseconds::zero()) {
       timer_->scheduleTimeout(this, idleTimeout_.value());
     }
   }

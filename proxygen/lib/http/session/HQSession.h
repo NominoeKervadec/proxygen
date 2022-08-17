@@ -53,6 +53,7 @@ enum class HQVersion : uint8_t {
 };
 
 extern const std::string kH3;
+extern const std::string kH3AliasV1;
 extern const std::string kHQ;
 extern const std::string kH3FBCurrentDraft;
 extern const std::string kH3CurrentDraft;
@@ -226,6 +227,9 @@ class HQSession
   void onNewBidirectionalStream(quic::StreamId id) noexcept override;
 
   void onNewUnidirectionalStream(quic::StreamId id) noexcept override;
+
+  void onBidirectionalStreamsAvailable(
+      uint64_t /*numStreamsAvailable*/) noexcept override;
 
   void onStopSending(quic::StreamId id,
                      quic::ApplicationErrorCode error) noexcept override;

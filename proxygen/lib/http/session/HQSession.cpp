@@ -89,6 +89,7 @@ using namespace proxygen::hq;
 namespace proxygen {
 
 const std::string kH3FBCurrentDraft("h3-fb-05");
+const std::string kH3AliasV1("h3-alias-01");
 const std::string kH3CurrentDraft("h3-29");
 const std::string kHQCurrentDraft("hq-29");
 const std::string kH3("h3");
@@ -137,6 +138,17 @@ void HQSession::onNewBidirectionalStream(quic::StreamId id) noexcept {
 
   // checkNewStream will reject kMaxClientBidiStreamId, so id + 4 will not wrap
   minUnseenIncomingStreamId_ = std::max(minUnseenIncomingStreamId_, id + 4);
+}
+
+void HQSession::onBidirectionalStreamsAvailable(
+    uint64_t numStreamsAvailable) noexcept {
+  if (direction_ == TransportDirection::UPSTREAM) {
+    VLOG(4) << "Got new max number of concurrent streams we can initiate: "
+            << numStreamsAvailable << " sess=" << *this;
+    if (infoCallback_ && supportsMoreTransactions()) {
+      infoCallback_->onSettingsOutgoingStreamsNotFull(*this);
+    }
+  }
 }
 
 void HQSession::onNewUnidirectionalStream(quic::StreamId id) noexcept {
@@ -394,7 +406,7 @@ bool HQSession::getAndCheckApplicationProtocol() {
       version_ = HQVersion::H1Q_FB_V1;
     } else if (alpn == kH1QV2ProtocolString) {
       version_ = HQVersion::H1Q_FB_V2;
-    } else if (alpn == kH3FBCurrentDraft || alpn == kH3 ||
+    } else if (alpn == kH3FBCurrentDraft || alpn == kH3AliasV1 || alpn == kH3 ||
                alpn == kH3CurrentDraft) {
       version_ = HQVersion::HQ;
     }
@@ -588,6 +600,11 @@ size_t HQSession::sendPriority(HTTPCodec::StreamID id, HTTPPriority priority) {
     return 0;
   }
   sock_->setStreamPriority(id, priority.urgency, priority.incremental);
+  // PRIORITY_UPDATE frames are sent by clients on the control stream.
+  // Servers do not send PRIORITY_UPDATE
+  if (direction_ == TransportDirection::DOWNSTREAM) {
+    return 0;
+  }
   auto controlStream = findControlStream(UnidirectionalStreamType::CONTROL);
   if (!controlStream) {
     return 0;
@@ -624,11 +641,11 @@ size_t HQSession::sendPushPriority(hq::PushId pushId, HTTPPriority priority) {
 
 size_t HQSession::HQStreamTransportBase::changePriority(
     HTTPTransaction* txn, HTTPPriority priority) noexcept {
-  if (session_.direction_ == TransportDirection::DOWNSTREAM) {
-    return 0;
-  }
   CHECK_EQ(txn, &txn_);
-  if (txn->isIngressEOMSeen()) {
+  // For a client there is no point in changing priority if the response has
+  // been fully received
+  if (session_.direction_ == TransportDirection::UPSTREAM &&
+      txn->isIngressEOMSeen()) {
     return 0;
   }
   if (txn->isPushed()) {
@@ -3234,9 +3251,9 @@ size_t HQSession::HQStreamTransportBase::sendBody(
   auto g = folly::makeGuard(setActiveCodec(__func__));
   CHECK(codecStreamId_);
 
+  uint64_t offset = streamWriteByteOffset();
   bufMeta_.length += body.length;
   bodyBytesEgressed_ += body.length;
-  uint64_t offset = streamWriteByteOffset();
 
   if (auto httpSessionActivityTracker =
           session_.getHTTPSessionActivityTracker()) {

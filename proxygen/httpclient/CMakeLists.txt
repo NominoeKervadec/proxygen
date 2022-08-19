@@ -6,4 +6,6 @@
 
 if (BUILD_SAMPLES)
   add_subdirectory(samples)
+else ()
+  add_subdirectory(samples/curl)
 endif()

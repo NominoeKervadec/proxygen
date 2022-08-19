@@ -121,7 +121,7 @@ if (BUILD_SAMPLES)
   )
 endif()
 
-if (BUILD_QUIC AND BUILD_SAMPLES)
+if (BUILD_QUIC)
   add_library(hq
       samples/hq/FizzContext.cpp
       samples/hq/H2Server.cpp

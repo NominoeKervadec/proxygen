@@ -426,7 +426,7 @@ mkdir -p "$DEPS_DIR"
 # Must execute from the directory containing this script
 cd "$(dirname "$0")"
 
-setup_fmt
+#setup_fmt
 setup_googletest
 setup_zstd
 setup_folly

@@ -11,6 +11,8 @@
 #include <proxygen/lib/http/codec/CodecUtil.h>
 #include <quic/codec/QuicInteger.h>
 
+#include <fmt/ostream.h>
+
 namespace proxygen {
 
 namespace {

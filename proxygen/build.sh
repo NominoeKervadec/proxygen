@@ -58,7 +58,8 @@ function install_dependencies_linux() {
     zlib1g-dev \
     binutils-dev \
     libsodium-dev \
-    libdouble-conversion-dev
+    libdouble-conversion-dev \
+    nasm
 }
 
 function install_dependencies_mac() {
@@ -254,6 +255,49 @@ function setup_folly() {
   cd "$BWD" || exit
 }
 
+function setup_ippcrypto() {
+  IPPCRYPTO_DIR=$DEPS_DIR/ippcrypto
+  IPPCRYPTO_BUILD_DIR=$DEPS_DIR/ippcrypto/build/
+
+  if [ ! -d "$IPPCRYPTO_DIR" ] ; then
+    echo -e "${COLOR_GREEN}[ INFO ] Cloning ippcrypto repo ${COLOR_OFF}"
+    git clone --recursive https://github.com/intel/ipp-crypto.git  "$IPPCRYPTO_DIR"
+  fi
+  cd "$IPPCRYPTO_DIR" || exit
+  if [ "$FETCH_DEPENDENCIES" == true ] ; then
+    git fetch --tags
+    git checkout ippcp_2021.6
+  fi
+  echo -e "${COLOR_GREEN}Building ippcrypto ${COLOR_OFF}"
+  mkdir -p "$IPPCRYPTO_BUILD_DIR"
+  cd "$IPPCRYPTO_BUILD_DIR" || exit
+  if [ -e $DEPS_DIR/lib/libcrypto_mb.a ]; then
+    # IPPCPP Make rebuilds everything unconditonally, so bypass early reinstallation
+    #return;
+    echo
+  else
+    cmake                                           \
+      -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
+      -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"            \
+      -DCMAKE_BUILD_TYPE=RelWithDebInfo             \
+      -DARCH=intel64                                \
+      -DMERGED_BLD:BOOL=on                          \
+      ..
+
+    make -j "$JOBS" all
+  fi
+  mkdir -p "$DEPS_DIR/lib/"
+  cp -r .build/RELEASE/lib/*.so* .build/RELEASE/lib/*.a "$DEPS_DIR/lib"
+  cp -r sources/ippcp/*.so* sources/ippcp/*.a "$DEPS_DIR/lib"
+  cp -r .build/RELEASE/include/* "$DEPS_DIR/include"
+  mkdir -p "$DEPS_DIR/lib/cmake/ippcp"
+  cp -r .build/RELEASE/cmake/* "$DEPS_DIR/lib/cmake/ippcp"
+  cp -r .build/RELEASE/pkgconfig/* "$DEPS_DIR/lib/pkgconfig"
+
+  echo -e "${COLOR_GREEN}ippcrypto is installed ${COLOR_OFF}"
+  cd "$BWD" || exit
+}
+
 function setup_fizz() {
   FIZZ_DIR=$DEPS_DIR/fizz
   FIZZ_BUILD_DIR=$DEPS_DIR/fizz/build/
@@ -430,6 +474,7 @@ cd "$(dirname "$0")"
 setup_googletest
 setup_zstd
 setup_folly
+setup_ippcrypto
 setup_fizz
 setup_wangle
 MAYBE_BUILD_QUIC=""

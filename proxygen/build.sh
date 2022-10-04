@@ -59,7 +59,9 @@ function install_dependencies_linux() {
     binutils-dev \
     libsodium-dev \
     libdouble-conversion-dev \
-    nasm
+    nasm \
+    autoconf \
+    automake
 }
 
 function install_dependencies_mac() {
@@ -298,6 +300,34 @@ function setup_ippcrypto() {
   cd "$BWD" || exit
 }
 
+function setup_isa_l_crypto() {
+  ISA_L_CRYPTO_DIR=$DEPS_DIR/isa_l_crypto
+
+  if [ ! -d "$ISA_L_CRYPTO_DIR" ] ; then
+    echo -e "${COLOR_GREEN}[ INFO ] Cloning isa_l_crypto repo ${COLOR_OFF}"
+    git clone --recursive https://github.com/intel/isa-l_crypto.git  "$ISA_L_CRYPTO_DIR"
+  fi
+  cd "$ISA_L_CRYPTO_DIR" || exit
+  if [ "$FETCH_DEPENDENCIES" == true ] ; then
+    git fetch --tags
+    git checkout v2.24.0
+  fi
+  echo -e "${COLOR_GREEN}Building isa_l_crypto ${COLOR_OFF}"
+  if [ -e $DEPS_DIR/lib/libisal_crypto.a ]; then
+    # ISA_L_CRYPTO Make rebuilds everything unconditonally, so bypass early reinstallation
+    #return;
+    echo
+  else
+    ./autogen.sh
+    ./configure --prefix="$DEPS_DIR" --libdir="$DEPS_DIR/lib"
+    make -j "$JOBS"
+    make install
+  fi
+
+  echo -e "${COLOR_GREEN}isa_l_crypto is installed ${COLOR_OFF}"
+  cd "$BWD" || exit
+}
+
 function setup_fizz() {
   FIZZ_DIR=$DEPS_DIR/fizz
   FIZZ_BUILD_DIR=$DEPS_DIR/fizz/build/
@@ -475,6 +505,7 @@ setup_googletest
 setup_zstd
 setup_folly
 setup_ippcrypto
+setup_isa_l_crypto
 setup_fizz
 setup_wangle
 MAYBE_BUILD_QUIC=""

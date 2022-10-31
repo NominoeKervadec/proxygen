@@ -115,11 +115,19 @@ function synch_dependency_to_commit() {
   if [ "$FETCH_DEPENDENCIES" = false ] ; then
     return
   fi
-  DEP_REV=$(sed 's/Subproject commit //' "$2")
+  DEP_REV_FB=$(sed 's/Subproject commit //' "$2")
+  if [[ "" != "$3" ]];  then
+    DEP_REV_BPK=$(sed 's/Subproject commit //' "$3")
+    DEP_REV="$DEP_REV_BPK"
+  fi
   pushd "$1"
   git fetch
   # Disable git warning about detached head when checking out a specific commit.
   git -c advice.detachedHead=false checkout "$DEP_REV"
+  if [[ $DEP_REV != $DEP_REV_FB ]];  then
+    # Check that broadpeak commit is more recent than fb
+    git merge-base --is-ancestor $DEP_REV_FB $DEP_REV ||  ( echo "Broadpeak commit is outdated compared to facebook's" && exit)
+  fi
   popd
 }
 
@@ -208,9 +216,10 @@ function setup_folly() {
 
   if [ ! -d "$FOLLY_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning folly repo ${COLOR_OFF}"
-    git clone https://github.com/NominoeKervadec/folly.git "$FOLLY_DIR"
+    git clone git@git.broadpeak.rd:Broadpeak/folly.git "$FOLLY_DIR"
   fi
-  synch_dependency_to_commit "$FOLLY_DIR" "$BASE_DIR"/../build/deps/github_hashes/facebook/folly-rev.txt
+  # We're using a custom fork
+  synch_dependency_to_commit "$FOLLY_DIR" "$BASE_DIR"/../build/deps/github_hashes/facebook/folly-rev.txt  "$BASE_DIR"/../build/deps/bpk_hashes/folly-rev.txt 
   if [ "$PLATFORM" = "Mac" ]; then
     # Homebrew installs OpenSSL in a non-default location on MacOS >= Mojave
     # 10.14 because MacOS has its own SSL implementation.  If we find the
@@ -276,7 +285,7 @@ function setup_ippcrypto() {
   if [ -e $DEPS_DIR/lib/libcrypto_mb.a ]; then
     # IPPCPP Make rebuilds everything unconditonally, so bypass early reinstallation
     #return;
-    echo
+    echo $DEPS_DIR/lib/libcrypto_mb.a already exists, skipping build
   else
     cmake                                           \
       -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
@@ -305,18 +314,19 @@ function setup_isa_l_crypto() {
 
   if [ ! -d "$ISA_L_CRYPTO_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning isa_l_crypto repo ${COLOR_OFF}"
-    git clone --recursive https://github.com/intel/isa-l_crypto.git  "$ISA_L_CRYPTO_DIR"
+    git clone --recursive git@git.broadpeak.rd:Broadpeak/isa_l_crypto.git  "$ISA_L_CRYPTO_DIR"
   fi
   cd "$ISA_L_CRYPTO_DIR" || exit
-  if [ "$FETCH_DEPENDENCIES" == true ] ; then
-    git fetch --tags
-    git checkout v2.24.0
-  fi
+  # We're using a custom fork with added variants
+  #if [ "$FETCH_DEPENDENCIES" == true ] ; then
+  #  git fetch --tags
+  #  git checkout v2.24.0
+  #fi
   echo -e "${COLOR_GREEN}Building isa_l_crypto ${COLOR_OFF}"
   if [ -e $DEPS_DIR/lib/libisal_crypto.a ]; then
     # ISA_L_CRYPTO Make rebuilds everything unconditonally, so bypass early reinstallation
     #return;
-    echo
+    echo $DEPS_DIR/lib/libisal_crypto.a exists, skipping build
   else
     ./autogen.sh
     ./configure --prefix="$DEPS_DIR" --libdir="$DEPS_DIR/lib"
@@ -333,9 +343,10 @@ function setup_fizz() {
   FIZZ_BUILD_DIR=$DEPS_DIR/fizz/build/
   if [ ! -d "$FIZZ_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning fizz repo ${COLOR_OFF}"
-    git clone https://github.com/facebookincubator/fizz "$FIZZ_DIR"
+    git clone git@git.broadpeak.rd:Broadpeak/fizz.git "$FIZZ_DIR"
   fi
-  synch_dependency_to_commit "$FIZZ_DIR" "$BASE_DIR"/../build/deps/github_hashes/facebookincubator/fizz-rev.txt
+  # We're using a custom fork with added variants
+  synch_dependency_to_commit "$FIZZ_DIR" "$BASE_DIR"/../build/deps/github_hashes/facebookincubator/fizz-rev.txt "$BASE_DIR"/../build/deps/bpk_hashes/fizz-rev.txt 
   echo -e "${COLOR_GREEN}Building Fizz ${COLOR_OFF}"
   mkdir -p "$FIZZ_BUILD_DIR"
   cd "$FIZZ_BUILD_DIR" || exit
@@ -402,9 +413,9 @@ function setup_mvfst() {
   MVFST_BUILD_DIR=$DEPS_DIR/mvfst/build/
   if [ ! -d "$MVFST_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning mvfst repo ${COLOR_OFF}"
-    git clone https://github.com/NominoeKervadec/mvfst.git "$MVFST_DIR"
+    git clone git@git.broadpeak.rd:Broadpeak/mvfst.git "$MVFST_DIR"
   fi
-  synch_dependency_to_commit "$MVFST_DIR" "$BASE_DIR"/../build/deps/github_hashes/facebookincubator/mvfst-rev.txt
+  synch_dependency_to_commit "$MVFST_DIR" "$BASE_DIR"/../build/deps/github_hashes/facebookincubator/mvfst-rev.txt  "$BASE_DIR"/../build/deps/bpk_hashes/mvfst-rev.txt 
   echo -e "${COLOR_GREEN}Building Mvfst ${COLOR_OFF}"
   mkdir -p "$MVFST_BUILD_DIR"
   cd "$MVFST_BUILD_DIR" || exit

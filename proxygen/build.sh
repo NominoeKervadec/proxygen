@@ -447,6 +447,7 @@ JOBS=8
 WITH_QUIC=false
 INSTALL_DEPENDENCIES=true
 FETCH_DEPENDENCIES=true
+DO_NOT_BUILD_PROXYGEN=false
 PREFIX=""
 COMPILER_FLAGS=""
 USAGE="./build.sh [-j num_jobs] [-q|--with-quic] [-m|--no-jemalloc] [--no-install-dependencies] [-p|--prefix] [-x|--compiler-flags] [--no-fetch-dependencies]"
@@ -472,6 +473,9 @@ while [ "$1" != "" ]; do
       ;;
     -t | --no-tests )
                   NO_BUILD_TESTS=true
+      ;;
+    --dependencies-only-do-not-build-proxygen )
+                  DO_NOT_BUILD_PROXYGEN=true
       ;;
     -p | --prefix )
                   shift
@@ -542,6 +546,10 @@ fi
 
 if [ -z "$PREFIX" ]; then
   PREFIX=$BWD
+fi
+
+if [ "$DO_NOT_BUILD_PROXYGEN" == true ]; then
+  exit
 fi
 
 # Build proxygen with cmake

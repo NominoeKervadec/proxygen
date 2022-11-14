@@ -318,10 +318,7 @@ function setup_isa_l_crypto() {
   fi
   cd "$ISA_L_CRYPTO_DIR" || exit
   # We're using a custom fork with added variants
-  #if [ "$FETCH_DEPENDENCIES" == true ] ; then
-  #  git fetch --tags
-  #  git checkout v2.24.0
-  #fi
+  synch_dependency_to_commit "$ISA_L_CRYPTO_DIR" "$BASE_DIR"/../build/deps/bpk_hashes/isa_l_crypto-rev.txt  "$BASE_DIR"/../build/deps/bpk_hashes/isa_l_crypto-rev.txt 
   echo -e "${COLOR_GREEN}Building isa_l_crypto ${COLOR_OFF}"
   if [ -e $DEPS_DIR/lib/libisal_crypto.a ]; then
     # ISA_L_CRYPTO Make rebuilds everything unconditonally, so bypass early reinstallation

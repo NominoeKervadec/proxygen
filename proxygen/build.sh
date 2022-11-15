@@ -111,14 +111,16 @@ function install_dependencies() {
 function synch_dependency_to_commit() {
   # Utility function to synch a dependency to a specific commit. Takes two arguments:
   #   - $1: folder of the dependency's git repository
-  #   - $2: path to the text file containing the desired commit hash
+  #   - $2: path to the text file containing the desired commit hash (facebook)
+  #   - $3: path to the text file containing the desired commit hash (changes from broadpeak, if any)
   if [ "$FETCH_DEPENDENCIES" = false ] ; then
     return
   fi
   DEP_REV_FB=$(sed 's/Subproject commit //' "$2")
   if [[ "" != "$3" ]];  then
-    DEP_REV_BPK=$(sed 's/Subproject commit //' "$3")
-    DEP_REV="$DEP_REV_BPK"
+    DEP_REV=$(sed 's/Subproject commit //' "$3")
+  else
+    DEP_REV=$DEP_REV_FB
   fi
   pushd "$1"
   git fetch
@@ -126,7 +128,7 @@ function synch_dependency_to_commit() {
   git -c advice.detachedHead=false checkout "$DEP_REV"
   if [[ $DEP_REV != $DEP_REV_FB ]];  then
     # Check that broadpeak commit is more recent than fb
-    git merge-base --is-ancestor $DEP_REV_FB $DEP_REV ||  ( echo "Broadpeak commit is outdated compared to facebook's" && exit)
+    git merge-base --is-ancestor $DEP_REV_FB $DEP_REV ||  ( echo "Broadpeak commit is outdated compared to facebook's" && exit )
   fi
   popd
 }

@@ -135,7 +135,7 @@ function synch_dependency_to_commit() {
 
 function setup_fmt() {
   FMT_DIR=$DEPS_DIR/fmt
-  FMT_BUILD_DIR=$DEPS_DIR/fmt/build/
+  FMT_BUILD_DIR=$DEPS_BUILD_DIR/fmt/build/
 
   if [ ! -d "$FMT_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning fmt repo ${COLOR_OFF}"
@@ -149,13 +149,13 @@ function setup_fmt() {
   cd "$FMT_BUILD_DIR" || exit
 
   cmake                                           \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"            \
+    -DCMAKE_PREFIX_PATH="$DEPS_PREFIX_DIR"               \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX_DIR"            \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo             \
     "$MAYBE_OVERRIDE_CXX_FLAGS"                   \
     -DFMT_DOC=OFF                                 \
     -DFMT_TEST=OFF                                \
-    ..
+    "$FMT_DIR"
   make -j "$JOBS"
   make install
   echo -e "${COLOR_GREEN}fmt is installed ${COLOR_OFF}"
@@ -164,7 +164,7 @@ function setup_fmt() {
 
 function setup_googletest() {
   GTEST_DIR=$DEPS_DIR/googletest
-  GTEST_BUILD_DIR=$DEPS_DIR/googletest/build/
+  GTEST_BUILD_DIR=$DEPS_BUILD_DIR/googletest/build/
 
   if [ ! -d "$GTEST_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning googletest repo ${COLOR_OFF}"
@@ -178,10 +178,10 @@ function setup_googletest() {
   cd "$GTEST_BUILD_DIR" || exit
 
   cmake                                           \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"            \
+    -DCMAKE_PREFIX_PATH="$DEPS_PREFIX_DIR"               \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX_DIR"            \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo             \
-    ..
+    "$GTEST_DIR"
   make -j "$JOBS"
   make install
   echo -e "${COLOR_GREEN}googletest is installed ${COLOR_OFF}"
@@ -190,8 +190,8 @@ function setup_googletest() {
 
 function setup_zstd() {
   ZSTD_DIR=$DEPS_DIR/zstd
-  ZSTD_BUILD_DIR=$DEPS_DIR/zstd/build/cmake/builddir
-  ZSTD_INSTALL_DIR=$DEPS_DIR
+  ZSTD_BUILD_DIR=$$DEPS_BUILD_DIR/zstd/build/
+  ZSTD_INSTALL_DIR=$DEPS_PREFIX_DIR
   if [ ! -d "$ZSTD_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning zstd repo ${COLOR_OFF}"
     git clone https://github.com/facebook/zstd.git "$ZSTD_DIR"
@@ -205,7 +205,7 @@ function setup_zstd() {
     -DCMAKE_PREFIX_PATH="$ZSTD_INSTALL_DIR"         \
     -DCMAKE_INSTALL_PREFIX="$ZSTD_INSTALL_DIR"      \
     ${CMAKE_EXTRA_ARGS[@]+"${CMAKE_EXTRA_ARGS[@]}"} \
-    ..
+    "$ZSTD_DIR/build/cmake/"
   make -j "$JOBS"
   make install
   echo -e "${COLOR_GREEN}Zstd is installed ${COLOR_OFF}"
@@ -214,7 +214,7 @@ function setup_zstd() {
 
 function setup_folly() {
   FOLLY_DIR=$DEPS_DIR/folly
-  FOLLY_BUILD_DIR=$DEPS_DIR/folly/build/
+  FOLLY_BUILD_DIR=$DEPS_BUILD_DIR/folly/build/
 
   if [ ! -d "$FOLLY_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning folly repo ${COLOR_OFF}"
@@ -252,8 +252,8 @@ function setup_folly() {
    MAYBE_USE_STATIC_BOOST="-DBOOST_LINK_STATIC=ON"
   fi
   cmake                                           \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"               \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"            \
+    -DCMAKE_PREFIX_PATH="$DEPS_PREFIX_DIR"               \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX_DIR"            \
     -DCMAKE_BUILD_TYPE=RelWithDebInfo             \
     -DBUILD_TESTS=OFF                             \
     "$MAYBE_USE_STATIC_DEPS"                      \
@@ -261,7 +261,7 @@ function setup_folly() {
     "$MAYBE_BUILD_SHARED_LIBS"                    \
     "$MAYBE_OVERRIDE_CXX_FLAGS"                   \
     $MAYBE_DISABLE_JEMALLOC                       \
-    ..
+    "$FOLLY_DIR"
   make -j "$JOBS"
   make install
   echo -e "${COLOR_GREEN}Folly is installed ${COLOR_OFF}"
@@ -270,7 +270,7 @@ function setup_folly() {
 
 function setup_ippcrypto() {
   IPPCRYPTO_DIR=$DEPS_DIR/ippcrypto
-  IPPCRYPTO_BUILD_DIR=$DEPS_DIR/ippcrypto/build/
+  IPPCRYPTO_BUILD_DIR=$DEPS_BUILD_DIR/ippcrypto/build/
 
   if [ ! -d "$IPPCRYPTO_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning ippcrypto repo ${COLOR_OFF}"
@@ -295,17 +295,17 @@ function setup_ippcrypto() {
       -DCMAKE_BUILD_TYPE=RelWithDebInfo             \
       -DARCH=intel64                                \
       -DMERGED_BLD:BOOL=on                          \
-      ..
+      "$IPPCRYPTO_DIR"
 
     make -j "$JOBS" all
   fi
-  mkdir -p "$DEPS_DIR/lib/"
-  cp -r .build/RELEASE/lib/*.so* .build/RELEASE/lib/*.a "$DEPS_DIR/lib"
-  cp -r sources/ippcp/*.so* sources/ippcp/*.a "$DEPS_DIR/lib"
-  cp -r .build/RELEASE/include/* "$DEPS_DIR/include"
-  mkdir -p "$DEPS_DIR/lib/cmake/ippcp"
-  cp -r .build/RELEASE/cmake/* "$DEPS_DIR/lib/cmake/ippcp"
-  cp -r .build/RELEASE/pkgconfig/* "$DEPS_DIR/lib/pkgconfig"
+  mkdir -p "$DEPS_PREFIX_DIR/lib/"
+  cp -r .build/RELEASE/lib/*.so* .build/RELEASE/lib/*.a "$DEPS_PREFIX_DIR/lib"
+  cp -r sources/ippcp/*.so* sources/ippcp/*.a "$DEPS_PREFIX_DIR/lib"
+  cp -r .build/RELEASE/include/* "$DEPS_PREFIX_DIR/include"
+  mkdir -p "$DEPS_PREFIX_DIR/lib/cmake/ippcp"
+  cp -r .build/RELEASE/cmake/* "$DEPS_PREFIX_DIR/lib/cmake/ippcp"
+  cp -r .build/RELEASE/pkgconfig/* "$DEPS_PREFIX_DIR/lib/pkgconfig"
 
   echo -e "${COLOR_GREEN}ippcrypto is installed ${COLOR_OFF}"
   cd "$BWD" || exit
@@ -328,7 +328,8 @@ function setup_isa_l_crypto() {
     echo $DEPS_DIR/lib/libisal_crypto.a exists, skipping build
   else
     ./autogen.sh
-    ./configure --prefix="$DEPS_DIR" --libdir="$DEPS_DIR/lib"
+    ./configure --prefix="$DEPS_PREFIX_DIR" \
+                       --libdir="$DEPS_PREFIX_DIR/lib"
     make -j "$JOBS"
     make install
   fi
@@ -339,7 +340,7 @@ function setup_isa_l_crypto() {
 
 function setup_fizz() {
   FIZZ_DIR=$DEPS_DIR/fizz
-  FIZZ_BUILD_DIR=$DEPS_DIR/fizz/build/
+  FIZZ_BUILD_DIR=$DEPS_BUILD_DIR/fizz/build/
   if [ ! -d "$FIZZ_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning fizz repo ${COLOR_OFF}"
     git clone git@git.broadpeak.rd:Broadpeak/fizz.git "$FIZZ_DIR"
@@ -360,9 +361,9 @@ function setup_fizz() {
   fi
 
   cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo       \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"             \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"          \
-    -DBUILD_TESTS=OFF                           \
+    -DCMAKE_PREFIX_PATH="$DEPS_PREFIX_DIR"             \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX_DIR"          \
+    -DBUILD_TESTS=ON                            \
     "$MAYBE_USE_STATIC_DEPS"                    \
     "$MAYBE_BUILD_SHARED_LIBS"                  \
     "$MAYBE_OVERRIDE_CXX_FLAGS"                 \
@@ -376,7 +377,7 @@ function setup_fizz() {
 
 function setup_wangle() {
   WANGLE_DIR=$DEPS_DIR/wangle
-  WANGLE_BUILD_DIR=$DEPS_DIR/wangle/build/
+  WANGLE_BUILD_DIR=$DEPS_BUILD_DIR/wangle/build/
   if [ ! -d "$WANGLE_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning wangle repo ${COLOR_OFF}"
     git clone https://github.com/facebook/wangle "$WANGLE_DIR"
@@ -394,8 +395,8 @@ function setup_wangle() {
   fi
 
   cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo       \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"             \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"          \
+    -DCMAKE_PREFIX_PATH="$DEPS_PREFIX_DIR"             \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX_DIR"          \
     -DBUILD_TESTS=OFF                           \
     "$MAYBE_USE_STATIC_DEPS"                    \
     "$MAYBE_BUILD_SHARED_LIBS"                  \
@@ -409,7 +410,7 @@ function setup_wangle() {
 
 function setup_mvfst() {
   MVFST_DIR=$DEPS_DIR/mvfst
-  MVFST_BUILD_DIR=$DEPS_DIR/mvfst/build/
+  MVFST_BUILD_DIR=$DEPS_BUILD_DIR/mvfst/build/
   if [ ! -d "$MVFST_DIR" ] ; then
     echo -e "${COLOR_GREEN}[ INFO ] Cloning mvfst repo ${COLOR_OFF}"
     git clone git@git.broadpeak.rd:Broadpeak/mvfst.git "$MVFST_DIR"
@@ -428,8 +429,8 @@ function setup_mvfst() {
 
 
   cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo       \
-    -DCMAKE_PREFIX_PATH="$DEPS_DIR"             \
-    -DCMAKE_INSTALL_PREFIX="$DEPS_DIR"          \
+    -DCMAKE_PREFIX_PATH="$DEPS_PREFIX_DIR"             \
+    -DCMAKE_INSTALL_PREFIX="$DEPS_PREFIX_DIR"          \
     -DBUILD_TESTS=OFF                           \
     "$MAYBE_USE_STATIC_DEPS"                    \
     "$MAYBE_BUILD_SHARED_LIBS"                  \
@@ -480,6 +481,14 @@ while [ "$1" != "" ]; do
                   shift
                   PREFIX=$1
       ;;
+     --deps-build-dir )
+                  shift
+                  DEPS_BUILD_DIR=$1
+      ;;
+      --deps-prefix-dir )
+                  shift
+                  DEPS_PREFIX_DIR=$1
+     ;;
     -x | --compiler-flags )
                   shift
                   COMPILER_FLAGS=$1
@@ -510,6 +519,8 @@ cd $BUILD_DIR || exit
 BWD=$(pwd)
 DEPS_DIR=$BWD/deps
 mkdir -p "$DEPS_DIR"
+: "${DEPS_BUILD_DIR:=$DEPS_DIR}""
+: "${DEPS_PREFIX_DIR:=$DEPS_DIR}''
 
 # Must execute from the directory containing this script
 cd "$(dirname "$0")"
@@ -555,7 +566,7 @@ fi
 cd "$BWD" || exit
 cmake                                     \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo       \
-  -DCMAKE_PREFIX_PATH="$DEPS_DIR"         \
+  -DCMAKE_PREFIX_PATH="$DEPS_PREFIX_DIR"         \
   -DCMAKE_INSTALL_PREFIX="$PREFIX"        \
   "$MAYBE_BUILD_QUIC"                     \
   "$MAYBE_BUILD_TESTS"                    \

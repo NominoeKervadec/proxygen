@@ -393,9 +393,11 @@ class HTTP2PriorityQueue : public HTTP2PriorityQueueBase {
     HTTPTransaction* txn_{nullptr};
     bool isPermanent_{false};
     bool enqueued_{false};
-#ifndef NDEBUG
+    //  Do not define structures of different size with NDEBUG on and off...
+    //  Seastar wants NDEBUG=0 in release
+    //#ifndef NDEBUG
     uint64_t totalEnqueuedWeightCheck_{0};
-#endif
+    //#endif
     uint64_t totalEnqueuedWeight_{0};
     uint64_t totalChildWeight_{0};
     std::list<std::unique_ptr<Node>> children_;

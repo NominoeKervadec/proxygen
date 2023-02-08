@@ -379,9 +379,11 @@ class HQFramedCodec : public HTTPCodec {
   // Current frame state
   size_t pendingDataFrameBytes_{0};
 
-#ifndef NDEBUG
+  //  Do not define structures of different size with NDEBUG on and off...
+  //  Seastar wants NDEBUG=0 in release
+  //#ifndef NDEBUG
   uint64_t receivedFrameCount_{0};
-#endif
+  //#endif
 
   enum class FrameState : uint8_t {
     FRAME_HEADER_TYPE = 0,

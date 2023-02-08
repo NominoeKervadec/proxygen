@@ -332,9 +332,11 @@ class HTTP2Codec
       {SettingsId::MAX_FRAME_SIZE, 16384},
       {SettingsId::MAX_HEADER_LIST_SIZE, 1 << 17},
   };
-#ifndef NDEBUG
+  //  Do not define structures of different size with NDEBUG on and off...
+  //  Seastar wants NDEBUG=0 in release
+  //#ifndef NDEBUG
   uint64_t receivedFrameCount_{0};
-#endif
+  //#endif
   enum class FrameState : uint8_t {
     UPSTREAM_CONNECTION_PREFACE = 0,
     EXPECT_FIRST_SETTINGS = 1,

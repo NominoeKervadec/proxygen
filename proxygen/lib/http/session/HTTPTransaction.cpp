@@ -198,8 +198,11 @@ void HTTPTransaction::onIngressHeadersComplete(
   if (isUpstream() && !isPushed() && msg->isResponse()) {
     lastResponseStatus_ = msg->getStatusCode();
   }
+  bool nonFinalPushHeaders = isPushed() && msg->isRequest();
   if (!validateIngressStateTransition(
-          HTTPTransactionIngressSM::Event::onHeaders)) {
+          msg->isFinal() && !nonFinalPushHeaders
+              ? HTTPTransactionIngressSM::Event::onFinalHeaders
+              : HTTPTransactionIngressSM::Event::onNonFinalHeaders)) {
     return;
   }
   if (msg->isRequest()) {
@@ -557,7 +560,7 @@ void HTTPTransaction::markIngressComplete() {
 void HTTPTransaction::markEgressComplete() {
   VLOG(4) << "Marking egress complete on " << *this;
   auto pendingBytes = getOutstandingEgressBodyBytes();
-  if (pendingBytes && isEnqueued()) {
+  if (pendingBytes) {
     int64_t deferredEgressBodyBytes = folly::to<int64_t>(pendingBytes);
     transport_.notifyEgressBodyBuffered(-deferredEgressBodyBytes);
   }
@@ -1045,9 +1048,7 @@ void HTTPTransaction::sendBody(std::unique_ptr<folly::IOBuf> body) {
           << "Sent body longer than chunk header ";
     }
     deferredEgressBody_.append(std::move(body));
-    if (isEnqueued()) {
-      transport_.notifyEgressBodyBuffered(bodyLen);
-    }
+    transport_.notifyEgressBodyBuffered(bodyLen);
   }
   notifyTransportPendingEgress();
 }
@@ -1063,10 +1064,8 @@ bool HTTPTransaction::addBufferMeta() noexcept {
   auto bufferMetaLen = *expectedResponseLength_;
   deferredBufferMeta_.length = bufferMetaLen;
   actualResponseLength_ = bufferMetaLen;
+  transport_.notifyEgressBodyBuffered(bufferMetaLen);
 
-  if (isEnqueued()) {
-    transport_.notifyEgressBodyBuffered(bufferMetaLen);
-  }
   notifyTransportPendingEgress();
   return true;
 }
@@ -1074,9 +1073,6 @@ bool HTTPTransaction::addBufferMeta() noexcept {
 bool HTTPTransaction::onWriteReady(const uint32_t maxEgress, double ratio) {
   DestructorGuard g(this);
   DCHECK(isEnqueued());
-  if (prioritySample_) {
-    updateRelativeWeight(ratio);
-  }
   cumulativeRatio_ += ratio;
   egressCalls_++;
   sendDeferredBody(maxEgress);
@@ -1185,9 +1181,6 @@ size_t HTTPTransaction::sendDeferredBufferMeta(uint32_t maxEgress) {
        it = egressBodyOffsetsToTrack_.begin()) {
     transport_.trackEgressBodyOffset(it->first, it->second);
     egressBodyOffsetsToTrack_.erase(it);
-  }
-  if (isPrioritySampled()) {
-    updateTransactionBytesSent(bufferMeta.length);
   }
   if (egressLimitBytesPerMs_ > 0) {
     numLimitedBytesEgressed_ += nbytes;
@@ -1314,9 +1307,6 @@ size_t HTTPTransaction::sendBodyNow(std::unique_ptr<folly::IOBuf> body,
   }
   if (sendEom && trailers_) {
     nbytes += sendEOMNow();
-  }
-  if (isPrioritySampled()) {
-    updateTransactionBytesSent(bodyLen);
   }
   if (egressLimitBytesPerMs_ > 0) {
     numLimitedBytesEgressed_ += nbytes;
@@ -1565,13 +1555,9 @@ void HTTPTransaction::notifyTransportPendingEgress() {
       // Insert into the queue and let the session know we've got something
       egressQueue_.signalPendingEgress(queueHandle_);
       transport_.notifyPendingEgress();
-      transport_.notifyEgressBodyBuffered(getOutstandingEgressBodyBytes());
     }
   } else if (isEnqueued()) {
     // Nothing to send, or not allowed to send right now.
-    int64_t deferredEgressBodyBytes =
-        folly::to<int64_t>(getOutstandingEgressBodyBytes());
-    transport_.notifyEgressBodyBuffered(-deferredEgressBodyBytes);
     egressQueue_.clearPendingEgress(queueHandle_);
   }
   updateHandlerPauseState();
@@ -1759,10 +1745,10 @@ void HTTPTransaction::updateAndSendPriority(
   transport_.sendPriority(this, priority_);
 }
 
-void HTTPTransaction::updateAndSendPriority(uint8_t urgency, bool incremental) {
-  urgency = HTTPMessage::normalizePriority((int8_t)urgency);
+void HTTPTransaction::updateAndSendPriority(HTTPPriority pri) {
+  pri.urgency = HTTPMessage::normalizePriority((int8_t)pri.urgency);
   // Note we no longer want to play with the egressQueue_ with the new API.
-  transport_.changePriority(this, HTTPPriority(urgency, incremental));
+  transport_.changePriority(this, pri);
 }
 
 void HTTPTransaction::onPriorityUpdate(const http2::PriorityUpdate& priority) {
@@ -1779,172 +1765,11 @@ void HTTPTransaction::onPriorityUpdate(const http2::PriorityUpdate& priority) {
   }
 }
 
-class HTTPTransaction::PrioritySample {
-  struct WeightedAccumulator {
-    void accumulate(uint64_t weighted, uint64_t total) {
-      weighted_ += weighted;
-      total_ += total;
-    }
-
-    void accumulateWeighted(uint64_t weighted) {
-      weighted_ += weighted;
-    }
-
-    void accumulateTotal(uint64_t total) {
-      total_ += total;
-    }
-
-    double getWeightedAverage() const {
-      return total_ ? (double)weighted_ / (double)total_ : 0;
-    }
-
-   private:
-    uint64_t weighted_{0};
-    uint64_t total_{0};
-  };
-
-  struct WeightedValue {
-    uint64_t value_{0};
-
-    void accumulateByTransactionBytes(uint64_t bytes) {
-      byTransactionBytesSent_.accumulate(value_ * bytes, bytes);
-    }
-
-    void accumulateBySessionBytes(uint64_t bytes) {
-      bySessionBytesScheduled_.accumulate(value_ * bytes, bytes);
-    }
-
-    void getSummary(
-        HTTPTransaction::PrioritySampleSummary::WeightedAverage& wa) const {
-      wa.byTransactionBytes_ = byTransactionBytesSent_.getWeightedAverage();
-      wa.bySessionBytes_ = bySessionBytesScheduled_.getWeightedAverage();
-    }
-
-   private:
-    WeightedAccumulator byTransactionBytesSent_;
-    WeightedAccumulator bySessionBytesScheduled_;
-  };
-
- public:
-  explicit PrioritySample(HTTPTransaction* tnx)
-      : tnx_(tnx), transactionBytesScheduled_(false) {
-  }
-
-  void updateContentionsCount(uint64_t contentions, uint64_t depth) {
-    transactionBytesScheduled_ = false;
-    ratio_ = 0.0;
-    contentions_.value_ = contentions;
-    depth_.value_ = depth;
-  }
-
-  void updateTransactionBytesSent(uint64_t bytes) {
-    transactionBytesScheduled_ = true;
-    measured_weight_.accumulateWeighted(bytes);
-    if (contentions_.value_) {
-      contentions_.accumulateByTransactionBytes(bytes);
-    } else {
-      VLOG(5) << "transfer " << bytes
-              << " transaction body bytes while contentions count = 0 "
-              << *tnx_;
-    }
-    depth_.accumulateByTransactionBytes(bytes);
-  }
-
-  void updateSessionBytesSheduled(uint64_t bytes) {
-    measured_weight_.accumulateTotal(bytes);
-    expected_weight_.accumulate((ratio_ * bytes) + 0.5, bytes);
-    if (contentions_.value_) {
-      contentions_.accumulateBySessionBytes(bytes);
-    } else {
-      VLOG(5) << "transfer " << bytes
-              << " session body bytes while contentions count = 0 " << *tnx_;
-    }
-    depth_.accumulateBySessionBytes(bytes);
-  }
-
-  void updateRatio(double ratio) {
-    ratio_ = ratio;
-  }
-
-  bool isTransactionBytesScheduled() const {
-    return transactionBytesScheduled_;
-  }
-
-  void getSummary(HTTPTransaction::PrioritySampleSummary& summary) const {
-    contentions_.getSummary(summary.contentions_);
-    depth_.getSummary(summary.depth_);
-    summary.expected_weight_ = expected_weight_.getWeightedAverage();
-    summary.measured_weight_ = measured_weight_.getWeightedAverage();
-  }
-
- private:
-  // TODO: remove tnx_ when not needed
-  HTTPTransaction* tnx_; // needed for error reporting, will be removed
-  WeightedValue contentions_;
-  WeightedValue depth_;
-  WeightedAccumulator expected_weight_;
-  WeightedAccumulator measured_weight_;
-  double ratio_;
-  bool transactionBytesScheduled_ : 1;
-};
-
-void HTTPTransaction::setPrioritySampled(bool sampled) {
-  if (sampled) {
-    prioritySample_ = std::make_unique<PrioritySample>(this);
-  } else {
-    prioritySample_.reset();
-  }
-}
-
-void HTTPTransaction::updateContentionsCount(uint64_t contentions) {
-  CHECK(prioritySample_);
-  if (LIKELY(queueHandle_ != nullptr)) {
-    prioritySample_->updateContentionsCount(
-        contentions, queueHandle_->calculateDepth(false));
-  }
-}
-
-void HTTPTransaction::updateRelativeWeight(double ratio) {
-  CHECK(prioritySample_);
-  prioritySample_->updateRatio(ratio);
-}
-
-void HTTPTransaction::updateSessionBytesSheduled(uint64_t bytes) {
-  CHECK(prioritySample_);
-  // Do not accumulate session bytes utill header is sent.
-  // Otherwise, the session bytes could be accumulated for a transaction
-  // that is not allowed to egress yet.
-  // Do not accumulate session bytes if transaction is paused.
-  // On the other hand, if the transaction is part of the egress,
-  // always accumulate the session bytes.
-  if ((bytes && firstHeaderByteSent_ && !egressPaused_ && !egressRateLimited_ &&
-       !flowControlPaused_) ||
-      prioritySample_->isTransactionBytesScheduled()) {
-    prioritySample_->updateSessionBytesSheduled(bytes);
-  }
-}
-
-void HTTPTransaction::updateTransactionBytesSent(uint64_t bytes) {
-  CHECK(prioritySample_);
-  if (bytes) {
-    prioritySample_->updateTransactionBytesSent(bytes);
-  }
-}
-
 void HTTPTransaction::checkIfEgressRateLimitedByUpstream() {
   if (transportCallback_ && !isEgressEOMQueued() &&
       getOutstandingEgressBodyBytes() == 0) {
     transportCallback_->egressBufferEmpty();
   }
-}
-
-bool HTTPTransaction::getPrioritySampleSummary(
-    HTTPTransaction::PrioritySampleSummary& summary) const {
-  if (prioritySample_) {
-    prioritySample_->getSummary(summary);
-    return true;
-  }
-  return false;
 }
 
 void HTTPTransaction::onDatagram(

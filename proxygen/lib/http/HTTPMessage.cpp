@@ -31,11 +31,12 @@ std::locale defaultLocale;
 
 namespace proxygen {
 
-std::string httpPriorityToString(uint8_t urgency, bool incremental) {
+std::string httpPriorityToString(const HTTPPriority& pri) {
   return folly::to<std::string>(
       "u=",
-      std::min(static_cast<uint8_t>(proxygen::kMaxPriority), urgency),
-      incremental ? ",i" : "");
+      std::min(static_cast<uint8_t>(proxygen::kMaxPriority), pri.urgency),
+      pri.incremental ? ",i" : "",
+      pri.orderId > 0 ? folly::to<std::string>(",o=", pri.orderId) : "");
 }
 
 std::mutex HTTPMessage::mutexDump_;
@@ -44,7 +45,7 @@ const pair<uint8_t, uint8_t> HTTPMessage::kHTTPVersion09(0, 9);
 const pair<uint8_t, uint8_t> HTTPMessage::kHTTPVersion10(1, 0);
 const pair<uint8_t, uint8_t> HTTPMessage::kHTTPVersion11(1, 1);
 
-void HTTPMessage::stripPerHopHeaders() {
+void HTTPMessage::stripPerHopHeaders(bool stripPriority) {
   // Some code paths end up recyling a single HTTPMessage instance for multiple
   // requests, and adding their own per-hop headers each time. In that case, we
   // don't want to accumulate these headers.
@@ -60,7 +61,7 @@ void HTTPMessage::stripPerHopHeaders() {
     trailersAllowed_ = checkForHeaderToken(HTTP_HEADER_TE, "trailers", false);
   }
 
-  headers_.stripPerHopHeaders(*strippedPerHopHeaders_);
+  headers_.stripPerHopHeaders(*strippedPerHopHeaders_, stripPriority);
 }
 
 HTTPMessage::HTTPMessage()
@@ -852,7 +853,7 @@ bool HTTPMessage::doHeaderTokenCheck(const HTTPHeaders& headers,
                                      bool caseSensitive) const {
   return headers.forEachValueOfHeader(headerCode, [&](const string& value) {
     std::vector<folly::StringPiece> tokens;
-    folly::split(",", value, tokens);
+    folly::split(',', value, tokens);
     for (auto t : tokens) {
       t = trim(t);
       if (caseSensitive) {
@@ -975,6 +976,9 @@ ParseURL HTTPMessage::setURLImplInternal(bool unparse, bool strict) {
     DVLOG(9) << "set path: " << u.path() << " query:" << u.query();
     req.path_ = u.path();
     req.query_ = u.query();
+    if (req.path_.empty()) {
+      req.path_.reset("/", 1);
+    }
   } else {
     DVLOG(4) << "Error in parsing URL: " << req.url_;
     req.path_.clear();
@@ -990,13 +994,11 @@ ParseURL HTTPMessage::setURLImplInternal(bool unparse, bool strict) {
 
 void HTTPMessage::setHTTPPriority(uint8_t urgency, bool incremental) {
   headers_.set(HTTP_HEADER_PRIORITY,
-               httpPriorityToString(urgency, incremental));
+               httpPriorityToString(HTTPPriority(urgency, incremental)));
 }
 
 void HTTPMessage::setHTTPPriority(HTTPPriority httpPriority) {
-  headers_.set(
-      HTTP_HEADER_PRIORITY,
-      httpPriorityToString(httpPriority.urgency, httpPriority.incremental));
+  headers_.set(HTTP_HEADER_PRIORITY, httpPriorityToString(httpPriority));
 }
 
 } // namespace proxygen

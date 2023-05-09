@@ -33,7 +33,7 @@ class HTTPSink {
   virtual ~HTTPSink() = default;
 
   [[nodiscard]] virtual HTTPTransaction* FOLLY_NULLABLE getHTTPTxn() const = 0;
-  virtual void detachHandler() = 0;
+  virtual void detachAndAbortIfIncomplete(std::unique_ptr<HTTPSink> self) = 0;
   // Sending data
   virtual void sendHeaders(const HTTPMessage& headers) = 0;
   virtual bool sendHeadersWithDelegate(
@@ -47,22 +47,15 @@ class HTTPSink {
   virtual void sendTrailers(const HTTPHeaders& trailers) = 0;
   virtual void sendEOM() = 0;
   virtual void sendAbort() = 0;
-  virtual void sendAbortIfIncomplete() = 0;
-  virtual HTTPTransaction* newPushedTransaction(
-      HTTPPushTransactionHandler* handler, ProxygenError* error = nullptr) = 0;
-  virtual HTTPTransaction* newExTransaction(HTTPTransaction::Handler* handler,
-                                            bool unidirectional) = 0;
+
   // Check state
   [[nodiscard]] virtual bool canSendHeaders() const = 0;
-  [[nodiscard]] virtual bool extraResponseExpected() const = 0;
   virtual const wangle::TransportInfo& getSetupTransportInfo()
       const noexcept = 0;
   virtual void getCurrentTransportInfo(wangle::TransportInfo* tinfo) const = 0;
   // Flow control
   virtual void pauseIngress() = 0;
-  virtual void pauseEgress() = 0;
   virtual void resumeIngress() = 0;
-  virtual void resumeEgress() = 0;
   [[nodiscard]] virtual bool isIngressPaused() const = 0;
   [[nodiscard]] virtual bool isEgressPaused() const = 0;
   virtual void setEgressRateLimit(uint64_t bitsPerSecond) = 0;

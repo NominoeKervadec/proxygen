@@ -30,8 +30,8 @@ struct ResourceData : public PeriodicStatsDataBase {
    * utilized should it not be idle (i.e. excludes both idle and iowait
    * proc stats).
    */
-  double getCpuRatioUtil() const {
-    return cpuRatioUtil_;
+  double getCpuRatioUtil(bool normalized = true) const {
+    return normalized ? std::min(1.0, cpuRatioUtil_) : cpuRatioUtil_;
   }
 
   /**
@@ -39,9 +39,14 @@ struct ResourceData : public PeriodicStatsDataBase {
    * Note for the purposes of this implementation, a core is considered
    * utilized should it not be idle (i.e. excludes both idle and iowait
    * proc stats)
+   *
+   * Cgroup CPU utilization might be significantly off during peak utilization
+   * i.e. way above 100% due to CPU throttling, pass `normalized` as false if
+   * you want to see values above 100, for example if you aggregate values over
+   * some window.
    */
-  double getCpuPctUtil() const {
-    return getPctFromRatio(cpuRatioUtil_);
+  double getCpuPctUtil(bool normalized = true) const {
+    return getPctFromRatio(getCpuRatioUtil(normalized));
   }
 
   /**
@@ -88,6 +93,50 @@ struct ResourceData : public PeriodicStatsDataBase {
     return usedMemBytes_;
   }
 
+  // Similar to getUsedMemBytes but difference is that
+  // `getUsedMemBytes` only contains anon memory while
+  // `getUsedMemBytesAll` contains file cache and all the other
+  // types of memory
+  uint64_t getUsedMemBytesAll() const {
+    return usedMemBytesAll_;
+  }
+
+  [[nodiscard]] double getMemPressureAvg10Pct() const {
+    return memPressureAvg10Pct_;
+  }
+
+  [[nodiscard]] double getMemPressureAvg60Pct() const {
+    return memPressureAvg60Pct_;
+  }
+
+  [[nodiscard]] double getMemPressureAvg300Pct() const {
+    return memPressureAvg300Pct_;
+  }
+
+  [[nodiscard]] double getCpuPressureAvg10Pct() const {
+    return cpuPressureAvg10Pct_;
+  }
+
+  [[nodiscard]] double getCpuPressureAvg60Pct() const {
+    return cpuPressureAvg60Pct_;
+  }
+
+  [[nodiscard]] double getCpuPressureAvg300Pct() const {
+    return cpuPressureAvg300Pct_;
+  }
+
+  [[nodiscard]] double getIoPressureAvg10Pct() const {
+    return ioPressureAvg10Pct_;
+  }
+
+  [[nodiscard]] double getIoPressureAvg60Pct() const {
+    return ioPressureAvg60Pct_;
+  }
+
+  [[nodiscard]] double getIoPressureAvg300Pct() const {
+    return ioPressureAvg300Pct_;
+  }
+
   // Gets the total memory of the system in bytes
   uint64_t getTotalMemBytes() const {
     return totalMemBytes_;
@@ -104,6 +153,10 @@ struct ResourceData : public PeriodicStatsDataBase {
   // Gets the used memory (0-100) of the system as a percent
   double getUsedMemPct() const {
     return ((double)usedMemBytes_) / totalMemBytes_ * 100;
+  }
+
+  double getUsedMemAllPct() const {
+    return ((double)usedMemBytesAll_) / totalMemBytes_ * 100;
   }
 
   // Gets the used memory (0-1.0) of the system as a ratio
@@ -239,9 +292,30 @@ struct ResourceData : public PeriodicStatsDataBase {
     softIrqCpuCoreRatioUtils_ = softIrqCpuCoreRatioUtils;
   }
 
-  void setMemStats(uint64_t usedMemBytes, uint64_t totalMemBytes) {
+  void setMemStats(uint64_t usedMemBytes,
+                   uint64_t usedMemBytesAll,
+                   uint64_t totalMemBytes) {
     usedMemBytes_ = usedMemBytes;
+    usedMemBytesAll_ = usedMemBytesAll;
     totalMemBytes_ = totalMemBytes;
+  }
+
+  void setCpuPressureStats(double avg10, double avg60, double avg300) {
+    cpuPressureAvg10Pct_ = avg10;
+    cpuPressureAvg60Pct_ = avg60;
+    cpuPressureAvg300Pct_ = avg300;
+  }
+
+  void setMemPressureStats(double avg10, double avg60, double avg300) {
+    memPressureAvg10Pct_ = avg10;
+    memPressureAvg60Pct_ = avg60;
+    memPressureAvg300Pct_ = avg300;
+  }
+
+  void setIoPressureStats(double avg10, double avg60, double avg300) {
+    ioPressureAvg10Pct_ = avg10;
+    ioPressureAvg60Pct_ = avg60;
+    ioPressureAvg300Pct_ = avg300;
   }
 
   /**
@@ -284,6 +358,9 @@ struct ResourceData : public PeriodicStatsDataBase {
   double cpuSoftIrqRatioUtil_{0};
   std::vector<double> softIrqCpuCoreRatioUtils_;
   uint64_t usedMemBytes_{0};
+  // usedMemBytes_ contains only anon memory while usedMemBytesAll_ contains
+  // all the memory including file cache.
+  uint64_t usedMemBytesAll_{0};
   uint64_t totalMemBytes_{0};
   uint64_t tcpMemoryPages_{0};
   uint64_t maxTcpMemLimit_{0};
@@ -293,6 +370,19 @@ struct ResourceData : public PeriodicStatsDataBase {
   uint64_t maxUdpMemLimit_{0};
   uint64_t pressureUdpMemLimit_{0};
   uint64_t minUdpMemLimit_{0};
+
+  // Pressure metrics (experimental)
+  double cpuPressureAvg10Pct_{0};
+  double cpuPressureAvg60Pct_{0};
+  double cpuPressureAvg300Pct_{0};
+
+  double memPressureAvg10Pct_{0};
+  double memPressureAvg60Pct_{0};
+  double memPressureAvg300Pct_{0};
+
+  double ioPressureAvg10Pct_{0};
+  double ioPressureAvg60Pct_{0};
+  double ioPressureAvg300Pct_{0};
 };
 
 /**

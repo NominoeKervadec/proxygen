@@ -34,27 +34,39 @@ namespace proxygen {
 constexpr uint8_t kDefaultHttpPriorityUrgency = 3;
 // We default incremental to True, different from the draft
 constexpr bool kDefaultHttpPriorityIncremental = true;
+constexpr uint64_t kDefaultOrderId = 0;
+constexpr int8_t kMinPriority = 0;
 constexpr int8_t kMaxPriority = 7;
 
 struct HTTPPriority {
   uint8_t urgency : 3;
   bool incremental : 1;
+  uint64_t orderId : 58;
 
   HTTPPriority()
       : urgency(kDefaultHttpPriorityUrgency),
-        incremental(kDefaultHttpPriorityIncremental) {
+        incremental(kDefaultHttpPriorityIncremental),
+        orderId(kDefaultOrderId) {
   }
 
-  HTTPPriority(uint8_t urgencyIn, bool incrementalIn)
+  HTTPPriority(uint8_t urgencyIn,
+               bool incrementalIn,
+               uint64_t orderIdIn = kDefaultOrderId)
       : urgency(std::min(urgencyIn, static_cast<uint8_t>(kMaxPriority))),
-        incremental(incrementalIn) {
+        incremental(incrementalIn),
+        orderId(orderIdIn) {
   }
 
   virtual ~HTTPPriority() = default;
 };
 
+inline bool operator==(const HTTPPriority& a, const HTTPPriority& b) {
+  return a.urgency == b.urgency && a.incremental == b.incremental &&
+         a.orderId == b.orderId;
+}
+
 // Convert Priority to a string representation in the form of "u=urgency[,i]"
-std::string httpPriorityToString(uint8_t urgency, bool incremental);
+std::string httpPriorityToString(const HTTPPriority& priority);
 
 class HTTPMessage;
 
@@ -410,6 +422,13 @@ class HTTPMessage {
   bool isHTTP1_1() const;
 
   /**
+   * Returns true if these are final headers.
+   */
+  bool isFinal() const {
+    return (isRequest() || !is1xxResponse() || getStatusCode() == 101);
+  }
+
+  /**
    * Returns true if this is a 1xx response.
    */
   bool is1xxResponse() const {
@@ -634,7 +653,7 @@ class HTTPMessage {
    * It is expected that during request processing, stripPerHopHeaders() will
    * be called before the message is proxied to the other connection.
    */
-  void stripPerHopHeaders();
+  void stripPerHopHeaders(bool stripPriority = false);
 
   const HTTPHeaders& getStrippedPerHopHeaders() const {
     CHECK(strippedPerHopHeaders_) << "call stripPerHopHeaders first";

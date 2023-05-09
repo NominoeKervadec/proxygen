@@ -22,11 +22,6 @@
 #include <proxygen/lib/http/session/test/MockQuicSocketDriver.h>
 #include <proxygen/lib/http/session/test/TestUtils.h>
 
-#define IS_H1Q_FB_V1 (GetParam().alpn_ == "h1q-fb")
-#define IS_H1Q_FB_V2 (GetParam().alpn_ == "h1q-fb-v2")
-#define IS_HQ (GetParam().alpn_.find("h3") == 0)
-#define ALPN_H1Q_FB_V1 (alpn == "h1q-fb")
-#define ALPN_H1Q_FB_V2 (alpn == "h1q-fb-v2")
 #define ALPN_HQ (alpn.find("h3") == 0)
 
 namespace {
@@ -84,8 +79,14 @@ class HQSessionTest
     folly::EventBaseManager::get()->clearEventBase();
     proxygen::HTTPSession::setDefaultWriteBufferLimit(65536);
     proxygen::HTTP2PriorityQueue::setNodeLifetime(std::chrono::milliseconds(2));
+    EXPECT_CALL(infoCb_, onTransactionAttached(testing::_))
+        .WillRepeatedly([this]() { onTransactionSymmetricCounter++; });
+    EXPECT_CALL(infoCb_, onTransactionAttached(testing::_))
+        .WillRepeatedly([this]() { onTransactionSymmetricCounter--; });
   }
+
   void TearDown() override {
+    EXPECT_EQ(onTransactionSymmetricCounter, 0);
   }
 
  protected:
@@ -122,15 +123,13 @@ class HQSessionTest
       egressSettings_.setSetting(proxygen::SettingsId::_HQ_DATAGRAM, 1);
     }
 
-    if (!IS_H1Q_FB_V1) {
-      egressControlCodec_ = std::make_unique<proxygen::hq::HQControlCodec>(
-          nextUnidirectionalStreamId_,
-          direction_ == proxygen::TransportDirection::DOWNSTREAM
-              ? proxygen::TransportDirection::UPSTREAM
-              : proxygen::TransportDirection::DOWNSTREAM,
-          proxygen::hq::StreamDirection::EGRESS,
-          egressSettings_);
-    }
+    egressControlCodec_ = std::make_unique<proxygen::hq::HQControlCodec>(
+        nextUnidirectionalStreamId_,
+        direction_ == proxygen::TransportDirection::DOWNSTREAM
+            ? proxygen::TransportDirection::UPSTREAM
+            : proxygen::TransportDirection::DOWNSTREAM,
+        proxygen::hq::StreamDirection::EGRESS,
+        egressSettings_);
     socketDriver_ = std::make_unique<quic::MockQuicSocketDriver>(
         &eventBase_,
         hqSession_,
@@ -151,26 +150,24 @@ class HQSessionTest
 
     EXPECT_CALL(infoCb_, onRead(testing::_, testing::_, testing::_))
         .Times(testing::AnyNumber());
-    if (!IS_H1Q_FB_V1) {
 
-      size_t ctrlStreamCount = (IS_H1Q_FB_V2 || IS_HQ) ? 1 : 0;
-      size_t qpackStreamCount =
-          (IS_HQ && GetParam().createQPACKStreams_) ? 2 : 0;
-      numCtrlStreams_ = ctrlStreamCount + qpackStreamCount;
-      socketDriver_->setLocalAppCallback(this);
+    size_t ctrlStreamCount = 1;
+    size_t qpackStreamCount = (GetParam().createQPACKStreams_) ? 2 : 0;
+    numCtrlStreams_ = ctrlStreamCount + qpackStreamCount;
+    socketDriver_->setLocalAppCallback(this);
 
-      if (GetParam().checkUniridStreamCallbacks &&
-          GetParam().unidirectionalStreamsCredit >= numCtrlStreams_) {
-        auto dirModifier =
-            (direction_ == proxygen::TransportDirection::DOWNSTREAM) ? 0 : 1;
-        EXPECT_CALL(infoCb_, onWrite(testing::_, testing::_))
-            .Times(testing::AtLeast(numCtrlStreams_));
-        for (auto i = 0; i < numCtrlStreams_; i++) {
-          folly::Optional<proxygen::HTTPCodec::StreamID> expectedStreamID =
-              i * 4 + 2 + dirModifier;
-          EXPECT_CALL(infoCb_, onRead(testing::_, testing::_, expectedStreamID))
-              .Times(testing::AtLeast(1));
-        }
+    if (GetParam().checkUniridStreamCallbacks &&
+        GetParam().unidirectionalStreamsCredit >= numCtrlStreams_ &&
+        GetParam().alpn_.find("h3") == 0) {
+      auto dirModifier =
+          (direction_ == proxygen::TransportDirection::DOWNSTREAM) ? 0 : 1;
+      EXPECT_CALL(infoCb_, onWrite(testing::_, testing::_))
+          .Times(testing::AtLeast(numCtrlStreams_));
+      for (auto i = 0; i < numCtrlStreams_; i++) {
+        folly::Optional<proxygen::HTTPCodec::StreamID> expectedStreamID =
+            i * 4 + 2 + dirModifier;
+        EXPECT_CALL(infoCb_, onRead(testing::_, testing::_, expectedStreamID))
+            .Times(testing::AtLeast(1));
       }
     }
 
@@ -190,37 +187,31 @@ class HQSessionTest
     if (GetParam().unidirectionalStreamsCredit < numCtrlStreams_) {
       return false;
     }
-    if (IS_H1Q_FB_V2) {
-      connControlStreamId_ = nextUnidirectionalStreamId();
-      createControlStream(socketDriver_.get(),
-                          connControlStreamId_,
-                          proxygen::hq::UnidirectionalStreamType::H1Q_CONTROL);
-    } else if (IS_HQ) {
-      connControlStreamId_ = nextUnidirectionalStreamId();
-      createControlStream(socketDriver_.get(),
-                          connControlStreamId_,
-                          proxygen::hq::UnidirectionalStreamType::CONTROL);
-      if (GetParam().createQPACKStreams_) {
-        createControlStream(
-            socketDriver_.get(),
-            nextUnidirectionalStreamId(),
-            proxygen::hq::UnidirectionalStreamType::QPACK_ENCODER);
-        createControlStream(
-            socketDriver_.get(),
-            nextUnidirectionalStreamId(),
-            proxygen::hq::UnidirectionalStreamType::QPACK_DECODER);
-      }
-      if (GetParam().shouldSendSettings_) {
-        sendSettings();
-      }
+    if (GetParam().alpn_.find("h3") != 0) {
+      // this function can be called when alpn negotiation failed
+      return false;
+    }
+    connControlStreamId_ = nextUnidirectionalStreamId();
+    createControlStream(socketDriver_.get(),
+                        connControlStreamId_,
+                        proxygen::hq::UnidirectionalStreamType::CONTROL);
+    if (GetParam().createQPACKStreams_) {
+      createControlStream(
+          socketDriver_.get(),
+          nextUnidirectionalStreamId(),
+          proxygen::hq::UnidirectionalStreamType::QPACK_ENCODER);
+      createControlStream(
+          socketDriver_.get(),
+          nextUnidirectionalStreamId(),
+          proxygen::hq::UnidirectionalStreamType::QPACK_DECODER);
+    }
+    if (GetParam().shouldSendSettings_) {
+      sendSettings();
     }
     return true;
   }
 
   void sendSettings() {
-    // For H1Q_FB_V2 we call this in some tests, but for V1 it would be an
-    // error
-    CHECK(!IS_H1Q_FB_V1);
     folly::IOBufQueue writeBuf{folly::IOBufQueue::cacheChainLength()};
     egressControlCodec_->generateSettings(writeBuf);
     socketDriver_->addReadEvent(
@@ -252,7 +243,6 @@ class HQSessionTest
       CHECK(preface) << "Preface can not be parsed protocolString="
                      << getProtocolString();
       switch (preface->first) {
-        case proxygen::hq::UnidirectionalStreamType::H1Q_CONTROL:
         case proxygen::hq::UnidirectionalStreamType::CONTROL:
           ingressControlCodec_ = std::make_unique<proxygen::hq::HQControlCodec>(
               id,
@@ -288,7 +278,6 @@ class HQSessionTest
     }
 
     switch (it->second) {
-      case proxygen::hq::UnidirectionalStreamType::H1Q_CONTROL:
       case proxygen::hq::UnidirectionalStreamType::CONTROL:
         parseReadData(
             ingressControlCodec_.get(), ingressControlBuf_, std::move(buf));
@@ -425,4 +414,5 @@ class HQSessionTest
   // Egress Control Stream
   std::unique_ptr<proxygen::hq::HQControlCodec> egressControlCodec_;
   folly::F14FastMap<quic::StreamId, proxygen::hq::PushId> pushes_;
+  uint64_t onTransactionSymmetricCounter{0};
 };

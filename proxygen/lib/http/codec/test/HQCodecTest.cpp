@@ -43,8 +43,6 @@ enum class CodecType {
   DOWNSTREAM,
   CONTROL_UPSTREAM,
   CONTROL_DOWNSTREAM,
-  H1Q_CONTROL_UPSTREAM,
-  H1Q_CONTROL_DOWNSTREAM,
   PUSH,
 };
 
@@ -65,8 +63,6 @@ class HQCodecTestFixture : public T {
     upstreamCodec_->setCallback(&callbacks_);
     upstreamControlCodec_.setCallback(&callbacks_);
     downstreamControlCodec_.setCallback(&callbacks_);
-    upstreamH1qControlCodec_.setCallback(&callbacks_);
-    downstreamH1qControlCodec_.setCallback(&callbacks_);
   }
 
   void parse() {
@@ -82,8 +78,6 @@ class HQCodecTestFixture : public T {
   void parseControl(CodecType type) {
     HQControlCodec* codec = nullptr;
     downstreamControlCodec_.setCallback(&callbacks_);
-    upstreamH1qControlCodec_.setCallback(&callbacks_);
-    downstreamH1qControlCodec_.setCallback(&callbacks_);
 
     switch (type) {
       case CodecType::CONTROL_UPSTREAM:
@@ -91,12 +85,6 @@ class HQCodecTestFixture : public T {
         break;
       case CodecType::CONTROL_DOWNSTREAM:
         codec = &downstreamControlCodec_;
-        break;
-      case CodecType::H1Q_CONTROL_UPSTREAM:
-        codec = &upstreamH1qControlCodec_;
-        break;
-      case CodecType::H1Q_CONTROL_DOWNSTREAM:
-        codec = &downstreamH1qControlCodec_;
         break;
       default:
         LOG(FATAL) << "Unknown Control Codec type";
@@ -157,18 +145,6 @@ class HQCodecTestFixture : public T {
                                          StreamDirection::INGRESS,
                                          ingressSettings_,
                                          hq::UnidirectionalStreamType::CONTROL};
-  HQControlCodec upstreamH1qControlCodec_{
-      0x1111,
-      TransportDirection::UPSTREAM,
-      StreamDirection::INGRESS,
-      ingressSettings_,
-      hq::UnidirectionalStreamType::H1Q_CONTROL};
-  HQControlCodec downstreamH1qControlCodec_{
-      0x2222,
-      TransportDirection::DOWNSTREAM,
-      StreamDirection::INGRESS,
-      egressSettings_,
-      hq::UnidirectionalStreamType::H1Q_CONTROL};
   QPACKCodec qpackUpstream_;
   QPACKCodec qpackDownstream_;
   QPACKEncoderCodec qpackEncoderCodec_{qpackDownstream_, callbacks_};
@@ -576,6 +552,18 @@ TEST_F(HQCodecTest, ZeroLengthSettings) {
   EXPECT_EQ(callbacks_.sessionErrors, 0);
 }
 
+TEST_F(HQCodecTest, InvalidSettings) {
+  std::deque<hq::SettingPair> settings{
+      {hq::SettingId::ENABLE_WEBTRANSPORT, 37}};
+  hq::writeSettings(queueCtrl_, settings);
+  parseControl(CodecType::CONTROL_UPSTREAM);
+  EXPECT_EQ(callbacks_.settings, 0);
+  EXPECT_EQ(callbacks_.streamErrors, 0);
+  EXPECT_EQ(callbacks_.sessionErrors, 1);
+  EXPECT_EQ(callbacks_.lastParseError->getHttp3ErrorCode(),
+            HTTP3::ErrorCode::HTTP_SETTINGS_ERROR);
+}
+
 TEST_F(HQCodecTest, ZeroLengthTrailers) {
   writeValidFrame(queue_, FrameType::HEADERS);
 
@@ -625,6 +613,33 @@ TEST_F(HQCodecTest, BasicConnect) {
   EXPECT_EQ(HTTPMethod::CONNECT, callbacks_.msg->getMethod());
   const auto& headers = callbacks_.msg->getHeaders();
   EXPECT_EQ(authority, headers.getSingleOrEmpty(proxygen::HTTP_HEADER_HOST));
+}
+
+TEST_F(HQCodecTest, TrimLwsInHeaderValue) {
+  HTTPMessage req = getGetRequest("/test");
+  req.getHeaders().add(HTTPHeaderCode::HTTP_HEADER_CONTENT_TYPE,
+                       " application/x-fb");
+  // adding header with lws will strip here
+  req.getHeaders().add(HTTPHeaderCode::HTTP_HEADER_USER_AGENT, "\n\t \r");
+  auto streamId = upstreamCodec_->createStream();
+  upstreamCodec_->generateHeader(queue_, streamId, req, true /* eom */);
+
+  parse();
+  EXPECT_EQ(callbacks_.messageBegin, 1);
+  EXPECT_EQ(callbacks_.headersComplete, 1);
+  EXPECT_EQ(callbacks_.messageComplete, 0);
+  EXPECT_EQ(callbacks_.streamErrors, 0);
+  EXPECT_EQ(callbacks_.sessionErrors, 0);
+
+  auto& parsedHeaders = callbacks_.msg->getHeaders();
+  EXPECT_TRUE(parsedHeaders.exists(HTTPHeaderCode::HTTP_HEADER_CONTENT_TYPE));
+  EXPECT_TRUE(parsedHeaders.exists(HTTPHeaderCode::HTTP_HEADER_USER_AGENT));
+  EXPECT_TRUE(
+      parsedHeaders.getSingleOrEmpty(HTTPHeaderCode::HTTP_HEADER_USER_AGENT)
+          .empty());
+  EXPECT_EQ(
+      parsedHeaders.getSingleOrEmpty(HTTPHeaderCode::HTTP_HEADER_CONTENT_TYPE),
+      "application/x-fb");
 }
 
 TEST_F(HQCodecTest, OnlyDataAfterConnect) {
@@ -798,6 +813,23 @@ TEST_F(HQCodecTest, HighAscii) {
   EXPECT_EQ(callbacks_.sessionErrors, 0);
 }
 
+TEST_F(HQCodecTest, WebTransportProtocol) {
+  HTTPMessage req;
+  req.setMethod(HTTPMethod::CONNECT);
+  req.setHTTPVersion(1, 1);
+  req.setURL("/wt");
+  req.setSecure(true);
+  req.setUpgradeProtocol("webtransport");
+
+  auto id = upstreamCodec_->createStream();
+  upstreamCodec_->generateHeader(queue_, id, req, false);
+  parse();
+
+  EXPECT_FALSE(callbacks_.msg->isIngressWebsocketUpgrade());
+  EXPECT_NE(nullptr, callbacks_.msg->getUpgradeProtocol());
+  EXPECT_EQ("webtransport", *callbacks_.msg->getUpgradeProtocol());
+}
+
 struct FrameAllowedParams {
   CodecType codecType;
   FrameType frameType;
@@ -809,11 +841,9 @@ std::string frameParamsToTestName(
   std::string testName = "";
   switch (info.param.codecType) {
     case CodecType::CONTROL_UPSTREAM:
-    case CodecType::H1Q_CONTROL_UPSTREAM:
       testName = "UpstreamControl";
       break;
     case CodecType::CONTROL_DOWNSTREAM:
-    case CodecType::H1Q_CONTROL_DOWNSTREAM:
       testName = "DownstreamControl";
       break;
     case CodecType::UPSTREAM:
@@ -860,6 +890,9 @@ std::string frameParamsToTestName(
     case FrameType::FB_PUSH_PRIORITY_UPDATE:
       testName += "PushPriorityUpdate";
       break;
+    case FrameType::WEBTRANSPORT_BIDI:
+      testName += "WebTransportBidiStreamType";
+      break;
     default:
       testName +=
           folly::to<std::string>(static_cast<uint64_t>(info.param.frameType));
@@ -883,11 +916,6 @@ TEST_P(HQCodecTestFrameAllowed, FrameAllowedOnCodec) {
       }
       writeValidFrame(queueCtrl_, GetParam().frameType);
       // add some extra trailing junk to the input buffer
-      queueCtrl_.append(IOBuf::copyBuffer("j"));
-      parseControl(GetParam().codecType);
-      break;
-    case CodecType::H1Q_CONTROL_UPSTREAM:
-      writeValidFrame(queueCtrl_, GetParam().frameType);
       queueCtrl_.append(IOBuf::copyBuffer("j"));
       parseControl(GetParam().codecType);
       break;
@@ -920,7 +948,6 @@ TEST_P(HQCodecTestFrameAllowed, FrameAllowedOnCodec) {
     switch (GetParam().codecType) {
       case CodecType::CONTROL_UPSTREAM:
       case CodecType::CONTROL_DOWNSTREAM:
-      case CodecType::H1Q_CONTROL_UPSTREAM:
         lenBefore = queueCtrl_.chainLength();
         parseControl(GetParam().codecType);
         lenAfter = queueCtrl_.chainLength();
@@ -978,9 +1005,13 @@ INSTANTIATE_TEST_SUITE_P(
         (FrameAllowedParams){
             CodecType::DOWNSTREAM, FrameType::FB_PUSH_PRIORITY_UPDATE, false},
         (FrameAllowedParams){
+            CodecType::DOWNSTREAM, FrameType::WEBTRANSPORT_BIDI, false},
+        (FrameAllowedParams){
             CodecType::UPSTREAM, FrameType::FB_PRIORITY_UPDATE, false},
         (FrameAllowedParams){
             CodecType::UPSTREAM, FrameType::FB_PUSH_PRIORITY_UPDATE, false},
+        (FrameAllowedParams){
+            CodecType::UPSTREAM, FrameType::WEBTRANSPORT_BIDI, false},
         // HQ Upstream Ingress Control Codec
         (FrameAllowedParams){
             CodecType::CONTROL_UPSTREAM, FrameType::DATA, false},
@@ -1010,6 +1041,8 @@ INSTANTIATE_TEST_SUITE_P(
         (FrameAllowedParams){CodecType::CONTROL_UPSTREAM,
                              FrameType::FB_PUSH_PRIORITY_UPDATE,
                              false},
+        (FrameAllowedParams){
+            CodecType::CONTROL_UPSTREAM, FrameType::WEBTRANSPORT_BIDI, false},
         // HQ Downstream Ingress Control Codec
         (FrameAllowedParams){
             CodecType::CONTROL_DOWNSTREAM, FrameType::DATA, false},
@@ -1038,85 +1071,23 @@ INSTANTIATE_TEST_SUITE_P(
             CodecType::CONTROL_DOWNSTREAM, FrameType::FB_PRIORITY_UPDATE, true},
         (FrameAllowedParams){CodecType::CONTROL_DOWNSTREAM,
                              FrameType::FB_PUSH_PRIORITY_UPDATE,
-                             true}),
-    frameParamsToTestName);
-
-class H1QCodecTestFrameAllowed
-    : public HQCodecTestFixture<TestWithParam<FrameAllowedParams>> {};
-
-TEST_P(H1QCodecTestFrameAllowed, FrameAllowedOnH1qControlCodec) {
-  writeValidFrame(queueCtrl_, GetParam().frameType);
-  parseControl(GetParam().codecType);
-  EXPECT_EQ(callbacks_.headerFrames, GetParam().allowed ? 1 : 0);
-  EXPECT_EQ(callbacks_.streamErrors, 0);
-  EXPECT_EQ(callbacks_.sessionErrors, GetParam().allowed ? 0 : 1);
-  if (!GetParam().allowed) {
-    EXPECT_EQ(callbacks_.lastParseError->getHttp3ErrorCode(),
-              HTTP3::ErrorCode::HTTP_FRAME_UNEXPECTED);
-  }
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    H1QFrameAllowedTests,
-    H1QCodecTestFrameAllowed,
-    Values(
-        // H1Q Upstream Ingress Control Codec
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_UPSTREAM, FrameType::DATA, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_UPSTREAM, FrameType::HEADERS, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_UPSTREAM, FrameType::CANCEL_PUSH, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_UPSTREAM, FrameType::SETTINGS, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_UPSTREAM, FrameType::PUSH_PROMISE, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_UPSTREAM, FrameType::GOAWAY, true},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_UPSTREAM, FrameType::MAX_PUSH_ID, false},
-        (FrameAllowedParams){CodecType::H1Q_CONTROL_UPSTREAM,
-                             FrameType(*getGreaseId(123456789)),
-                             false},
-        (FrameAllowedParams){CodecType::H1Q_CONTROL_UPSTREAM,
-                             FrameType(*getGreaseId(987654321)),
-                             false},
-        // H1Q Downstream Ingress Control Codec
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_DOWNSTREAM, FrameType::DATA, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_DOWNSTREAM, FrameType::HEADERS, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_DOWNSTREAM, FrameType::CANCEL_PUSH, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_DOWNSTREAM, FrameType::SETTINGS, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_DOWNSTREAM, FrameType::PUSH_PROMISE, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_DOWNSTREAM, FrameType::GOAWAY, false},
-        (FrameAllowedParams){
-            CodecType::H1Q_CONTROL_DOWNSTREAM, FrameType::MAX_PUSH_ID, false},
-        (FrameAllowedParams){CodecType::H1Q_CONTROL_DOWNSTREAM,
-                             FrameType(*getGreaseId(13579)),
-                             false},
-        (FrameAllowedParams){CodecType::H1Q_CONTROL_DOWNSTREAM,
-                             FrameType(*getGreaseId(97531)),
+                             true},
+        (FrameAllowedParams){CodecType::CONTROL_DOWNSTREAM,
+                             FrameType::WEBTRANSPORT_BIDI,
                              false}),
     frameParamsToTestName);
 
 class HQCodecTestFrameBeforeSettings
     : public HQCodecTestFixture<TestWithParam<FrameAllowedParams>> {};
 
-TEST_P(HQCodecTestFrameBeforeSettings, FrameAllowedOnH1qControlCodec) {
+TEST_P(HQCodecTestFrameBeforeSettings, FrameAllowedOnControlCodec) {
   writeValidFrame(queueCtrl_, GetParam().frameType);
   parseControl(GetParam().codecType);
   EXPECT_EQ(callbacks_.headerFrames, GetParam().allowed ? 1 : 0);
   EXPECT_EQ(callbacks_.streamErrors, 0);
   EXPECT_EQ(callbacks_.sessionErrors, GetParam().allowed ? 0 : 1);
   if (!GetParam().allowed) {
-    if (GetParam().codecType == CodecType::H1Q_CONTROL_DOWNSTREAM ||
-        GetParam().codecType == CodecType::H1Q_CONTROL_UPSTREAM ||
-        GetParam().frameType == hq::FrameType::DATA ||
+    if (GetParam().frameType == hq::FrameType::DATA ||
         GetParam().frameType == hq::FrameType::HEADERS ||
         GetParam().frameType == hq::FrameType::PUSH_PROMISE) {
       EXPECT_EQ(callbacks_.lastParseError->getHttp3ErrorCode(),

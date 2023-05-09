@@ -51,6 +51,10 @@ HTTPTransactionHandler* Dispatcher::getRequestHandler(HTTPMessage* msg) {
     return new WaitReleaseHandler(
         folly::EventBaseManager::get()->getEventBase(), params_);
   }
+  if (boost::algorithm::starts_with(path, "/chunked")) {
+    return new ChunkedHandler(params_,
+                              folly::EventBaseManager::get()->getEventBase());
+  }
   if (boost::algorithm::starts_with(path, "/push")) {
     return new ServerPushHandler(params_);
   }
@@ -58,7 +62,10 @@ HTTPTransactionHandler* Dispatcher::getRequestHandler(HTTPMessage* msg) {
   if (!FLAGS_static_root.empty()) {
     return new StaticFileHandler(params_, FLAGS_static_root);
   }
-
+  if (boost::algorithm::starts_with(path, "/delay")) {
+    return new DelayHandler(params_,
+                            folly::EventBaseManager::get()->getEventBase());
+  }
   return new DummyHandler(params_);
 }
 
@@ -223,10 +230,7 @@ void ServerPushHandler::sendPushResponse(proxygen::HTTPTransaction* pushTxn,
                                          const std::string& pushedResourceBody,
                                          bool eom) {
   VLOG(10) << "ServerPushHandler::" << __func__;
-  proxygen::HTTPMessage resp;
-  resp.setVersionString(getHttpVersion());
-  resp.setStatusCode(200);
-  resp.setStatusMessage("OK");
+  proxygen::HTTPMessage resp = createHttpResponse(200, "OK");
   resp.setWantsKeepalive(true);
   resp.setIsChunked(true);
   pushTxn->sendHeaders(resp);
@@ -251,10 +255,7 @@ void ServerPushHandler::sendPushResponse(proxygen::HTTPTransaction* pushTxn,
 }
 
 void ServerPushHandler::sendErrorResponse(const std::string& body) {
-  proxygen::HTTPMessage resp;
-  resp.setVersionString(getHttpVersion());
-  resp.setStatusCode(400);
-  resp.setStatusMessage("ERROR");
+  proxygen::HTTPMessage resp = createHttpResponse(400, "ERROR");
   resp.setWantsKeepalive(false);
   txn_->sendHeaders(resp);
   txn_->sendBody(folly::IOBuf::copyBuffer(body));
@@ -264,10 +265,7 @@ void ServerPushHandler::sendErrorResponse(const std::string& body) {
 void ServerPushHandler::sendOkResponse(const std::string& body, bool eom) {
   VLOG(10) << "ServerPushHandler::" << __func__ << ": sending " << body.length()
            << " bytes";
-  proxygen::HTTPMessage resp;
-  resp.setVersionString(getHttpVersion());
-  resp.setStatusCode(200);
-  resp.setStatusMessage("OK");
+  proxygen::HTTPMessage resp = createHttpResponse(200, "OK");
   resp.setWantsKeepalive(true);
   resp.setIsChunked(true);
   txn_->sendHeaders(resp);

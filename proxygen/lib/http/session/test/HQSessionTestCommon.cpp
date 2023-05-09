@@ -68,7 +68,7 @@ size_t generateStreamPreface(folly::IOBufQueue& writeBuf,
 
 std::string paramsToTestName(const testing::TestParamInfo<TestParams>& info) {
   std::vector<std::string> paramsV;
-  folly::split("-", info.param.alpn_, paramsV);
+  folly::split('-', info.param.alpn_, paramsV);
   if (info.param.numBytesOnPushStream < kUnlimited) {
     paramsV.push_back("_" +
                       folly::to<std::string>(info.param.numBytesOnPushStream));
@@ -88,20 +88,12 @@ std::string paramsToTestName(const testing::TestParamInfo<TestParams>& info) {
 
 folly::Optional<std::pair<UnidirectionalStreamType, size_t>> parseStreamPreface(
     folly::io::Cursor& cursor, std::string alpn) {
-  CHECK(!ALPN_H1Q_FB_V1);
   auto res = quic::decodeQuicInteger(cursor);
   if (!res) {
     return folly::none;
   }
   auto prefaceEnum = UnidirectionalStreamType(res->first);
   switch (prefaceEnum) {
-    case UnidirectionalStreamType::H1Q_CONTROL:
-      if (ALPN_H1Q_FB_V2) {
-        return std::make_pair(prefaceEnum, res->second);
-      } else {
-        return folly::none;
-      }
-      break;
     case UnidirectionalStreamType::CONTROL:
     case UnidirectionalStreamType::PUSH:
     case UnidirectionalStreamType::QPACK_ENCODER:

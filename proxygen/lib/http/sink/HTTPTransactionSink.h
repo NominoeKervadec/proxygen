@@ -29,8 +29,17 @@ class HTTPTransactionSink : public HTTPSink {
   [[nodiscard]] HTTPTransaction* FOLLY_NULLABLE getHTTPTxn() const override {
     return httpTransaction_;
   }
-  void detachHandler() override {
+
+  void detachAndAbortIfIncomplete(std::unique_ptr<HTTPSink> self) override {
+    CHECK_EQ(self.get(), this);
+    httpTransaction_->setTransportCallback(nullptr);
     httpTransaction_->setHandler(nullptr);
+    if (!(httpTransaction_->isEgressComplete() ||
+          httpTransaction_->isEgressEOMQueued()) ||
+        !httpTransaction_->isIngressComplete()) {
+      sendAbort();
+    }
+    self.reset();
   }
 
   // Sending data
@@ -71,27 +80,6 @@ class HTTPTransactionSink : public HTTPSink {
   [[nodiscard]] bool canSendHeaders() const override {
     return httpTransaction_->canSendHeaders();
   }
-  void sendAbortIfIncomplete() override {
-    // TODO: this reveals warts in the txn api. If egress and ingress are
-    // complete, we really should have gotten detachTransaction() already.
-    if (!(httpTransaction_->isEgressComplete() ||
-          httpTransaction_->isEgressEOMQueued()) ||
-        !httpTransaction_->isIngressComplete()) {
-      sendAbort();
-    }
-  }
-  HTTPTransaction* newPushedTransaction(
-      HTTPPushTransactionHandler* handler,
-      ProxygenError* error = nullptr) override {
-    return httpTransaction_->newPushedTransaction(handler, error);
-  }
-  HTTPTransaction* newExTransaction(HTTPTransaction::Handler* handler,
-                                    bool unidirectional) override {
-    return httpTransaction_->newExTransaction(handler, unidirectional);
-  }
-  [[nodiscard]] bool extraResponseExpected() const override {
-    return httpTransaction_->extraResponseExpected();
-  }
   const wangle::TransportInfo& getSetupTransportInfo() const noexcept override {
     return httpTransaction_->getSetupTransportInfo();
   }
@@ -102,14 +90,8 @@ class HTTPTransactionSink : public HTTPSink {
   void pauseIngress() override {
     httpTransaction_->pauseIngress();
   }
-  void pauseEgress() override {
-    httpTransaction_->pauseEgress();
-  }
   void resumeIngress() override {
     httpTransaction_->resumeIngress();
-  }
-  void resumeEgress() override {
-    httpTransaction_->resumeEgress();
   }
   [[nodiscard]] bool isIngressPaused() const override {
     return httpTransaction_->isIngressPaused();

@@ -1495,7 +1495,7 @@ class HTTPTransaction
    */
   void updateAndSendPriority(int8_t newPriority);
   void updateAndSendPriority(const http2::PriorityUpdate& pri);
-  virtual void updateAndSendPriority(uint8_t urgency, bool incremental);
+  virtual void updateAndSendPriority(HTTPPriority pri);
 
   /**
    * Notify of priority change, will not generate a PRIORITY frame
@@ -1525,29 +1525,7 @@ class HTTPTransaction
 
   int32_t getRecvToAck() const;
 
-  bool isPrioritySampled() const {
-    return prioritySample_ != nullptr;
-  }
-
-  void setPrioritySampled(bool sampled);
-  void updateContentionsCount(uint64_t contentions);
-  void updateRelativeWeight(double ratio);
-  void updateSessionBytesSheduled(uint64_t bytes);
-  void updateTransactionBytesSent(uint64_t bytes);
   void checkIfEgressRateLimitedByUpstream();
-
-  struct PrioritySampleSummary {
-    struct WeightedAverage {
-      double byTransactionBytes_{0};
-      double bySessionBytes_{0};
-    };
-    WeightedAverage contentions_;
-    WeightedAverage depth_;
-    double expected_weight_;
-    double measured_weight_;
-  };
-
-  bool getPrioritySampleSummary(PrioritySampleSummary& summary) const;
 
   const CompressionInfo& getCompressionInfo() const;
 
@@ -1896,9 +1874,6 @@ class HTTPTransaction
   folly::Optional<std::chrono::milliseconds> idleTimeout_;
 
   folly::HHWheelTimer* timer_;
-
-  class PrioritySample;
-  std::unique_ptr<PrioritySample> prioritySample_;
 
   // Keeps track for body offset processed so far.
   uint64_t ingressBodyOffset_{0};

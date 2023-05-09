@@ -9,12 +9,12 @@
 #include <proxygen/lib/http/codec/HTTP1xCodec.h>
 
 #include <folly/String.h>
+#include <folly/base64.h>
 #include <folly/portability/GTest.h>
 #include <proxygen/lib/http/HTTPHeaderSize.h>
 #include <proxygen/lib/http/HTTPMessage.h>
 #include <proxygen/lib/http/codec/test/MockHTTPCodec.h>
 #include <proxygen/lib/http/codec/test/TestUtils.h>
-#include <proxygen/lib/utils/Base64.h>
 
 using namespace proxygen;
 using namespace std;
@@ -458,6 +458,8 @@ TEST(HTTP1xCodecTest, TestChunkedHeaders) {
     EXPECT_EQ(callbacks.headersComplete, 1);
     EXPECT_EQ(callbacks.headerSize.uncompressed,
               buffer1->length() + buffer2->length());
+    EXPECT_EQ(callbacks.headerSize.uncompressed,
+              callbacks.headerSize.compressed);
   }
 }
 
@@ -807,12 +809,8 @@ TEST(HTTP1xCodecTest, WebsocketConnectionHeader) {
   EXPECT_NE(ws_sec_key, empty_string);
   EXPECT_NE(ws_sec_key, "key should change");
 
-  // We know the key is length 16
-  // https://tools.ietf.org/html/rfc6455#section-4.2.1.5
-  // for base64 % 3 leaves 1 byte so we expect padding of '=='
-  // hence this offset of 2 explicitly
-  EXPECT_NO_THROW(Base64::decode(ws_sec_key, 2));
-  EXPECT_EQ(16, Base64::decode(ws_sec_key, 2).length());
+  EXPECT_NO_THROW(folly::base64Decode(ws_sec_key));
+  EXPECT_EQ(16, folly::base64Decode(ws_sec_key).length());
 
   EXPECT_EQ(headers.getSingleOrEmpty(HTTP_HEADER_SEC_WEBSOCKET_ACCEPT),
             empty_string);
@@ -1468,6 +1466,18 @@ TEST(HTTP1xCodecTest, TrailerCtls) {
           }));
   codec.onIngress(*buffer);
 }
+
+TEST(HTTP1xCodecTest, AbsoluteURLNoPath) {
+  HTTP1xCodec codec(TransportDirection::DOWNSTREAM, true);
+  HTTP1xCodecCallback callbacks;
+  codec.setCallback(&callbacks);
+  auto buffer = folly::IOBuf::copyBuffer(
+      string("GET http://www.foo.com HTTP/1.0\r\n\r\n"));
+  codec.onIngress(*buffer);
+  EXPECT_EQ(callbacks.headersComplete, 1);
+  EXPECT_EQ(callbacks.msg_->getPathAsStringPiece(), string("/"));
+}
+
 class ConnectionHeaderTest
     : public TestWithParam<std::pair<std::list<string>, string>> {
  public:

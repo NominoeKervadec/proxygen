@@ -10,12 +10,12 @@
 
 #include <folly/Memory.h>
 #include <folly/Random.h>
+#include <folly/base64.h>
 #include <folly/ssl/OpenSSLHash.h>
 #include <proxygen/lib/http/HTTPHeaderSize.h>
 #include <proxygen/lib/http/RFC2616.h>
 #include <proxygen/lib/http/codec/CodecProtocol.h>
 #include <proxygen/lib/http/codec/CodecUtil.h>
-#include <proxygen/lib/utils/Base64.h>
 
 using folly::IOBuf;
 using folly::IOBufQueue;
@@ -110,7 +110,8 @@ HTTP1xCodec::HTTP1xCodec(TransportDirection direction,
       ingressUpgradeComplete_(false),
       egressUpgrade_(false),
       nativeUpgrade_(false),
-      headersComplete_(false) {
+      headersComplete_(false),
+      releaseEgressAfterRequest_(false) {
   switch (direction) {
     case TransportDirection::DOWNSTREAM:
       http_parser_init(&parser_, HTTP_REQUEST);
@@ -231,6 +232,7 @@ size_t HTTP1xCodec::onIngressImpl(const IOBuf& buf) {
     // the headers we need to keep accounting of it for total header size
     if (!headersComplete_) {
       headerSize_.uncompressed += bytesParsed;
+      headerSize_.compressed += bytesParsed;
     }
     parserActive_ = false;
     parserError_ = (HTTP_PARSER_ERRNO(&parser_) != HPE_OK) &&
@@ -343,7 +345,7 @@ constexpr folly::StringPiece kWSMagicString =
 std::string HTTP1xCodec::generateWebsocketKey() const {
   std::array<unsigned char, 16> arr;
   folly::Random::secureRandom(arr.data(), arr.size());
-  return Base64::encode(folly::ByteRange(arr.data(), arr.size()));
+  return folly::base64Encode(std::string_view((char*)arr.data(), arr.size()));
 }
 
 std::string HTTP1xCodec::generateWebsocketAccept(const std::string& key) const {
@@ -354,7 +356,8 @@ std::string HTTP1xCodec::generateWebsocketAccept(const std::string& key) const {
   std::array<unsigned char, 20> arr;
   folly::MutableByteRange accept(arr.data(), arr.size());
   digest.hash_final(accept);
-  return Base64::encode(accept);
+  return folly::base64Encode(
+      std::string_view((char*)accept.data(), accept.size()));
 }
 
 void HTTP1xCodec::serializeWebsocketHeader(IOBufQueue& writeBuf,
@@ -686,7 +689,7 @@ void HTTP1xCodec::generateHeader(
   }
 
   if (size) {
-    size->compressed = 0;
+    size->compressed = len;
     size->uncompressed = len;
   }
 }

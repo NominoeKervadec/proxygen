@@ -81,7 +81,7 @@ bool CurlClient::saveResponseToFile(const std::string& outputFilename) {
 HTTPHeaders CurlClient::parseHeaders(const std::string& headersString) {
   vector<StringPiece> headersList;
   HTTPHeaders headers;
-  folly::split(",", headersString, headersList);
+  folly::split(',', headersString, headersList);
   for (const auto& headerPair : headersList) {
     vector<StringPiece> nv;
     folly::split('=', headerPair, nv);
@@ -213,7 +213,7 @@ void CurlClient::sendBodyFromFile() {
     unique_ptr<IOBuf> buf = IOBuf::createCombined(kReadSize);
     inputFile_->read((char*)buf->writableData(), kReadSize);
     buf->append(inputFile_->gcount());
-    txn_->sendBody(move(buf));
+    txn_->sendBody(std::move(buf));
   }
   if (!egressPaused_) {
     txn_->sendEOM();

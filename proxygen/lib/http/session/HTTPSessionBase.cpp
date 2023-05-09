@@ -52,6 +52,8 @@ HTTPSessionBase::HTTPSessionBase(const SocketAddress& localAddr,
 
 HTTPSessionBase::~HTTPSessionBase() {
   if (sessionStats_) {
+    sessionStats_->recordPendingBufferedWriteBytes(-1 *
+                                                   (int64_t)pendingWriteSize_);
     sessionStats_->recordPendingBufferedReadBytes(-1 *
                                                   (int64_t)pendingReadSize_);
   }
@@ -59,11 +61,14 @@ HTTPSessionBase::~HTTPSessionBase() {
 
 void HTTPSessionBase::setSessionStats(HTTPSessionStats* stats) {
   if (sessionStats_ != stats && sessionStats_ != nullptr) {
+    sessionStats_->recordPendingBufferedWriteBytes(-1 *
+                                                   (int64_t)pendingWriteSize_);
     sessionStats_->recordPendingBufferedReadBytes(-1 *
                                                   (int64_t)pendingReadSize_);
   }
   sessionStats_ = stats;
   if (sessionStats_) {
+    sessionStats_->recordPendingBufferedWriteBytes(pendingWriteSize_);
     sessionStats_->recordPendingBufferedReadBytes(pendingReadSize_);
   }
 }
@@ -120,7 +125,7 @@ bool HTTPSessionBase::onBodyImpl(std::unique_ptr<folly::IOBuf> chain,
     // notifyBodyProcessed() on it.
     VLOG(4) << *this << " Enqueued ingress. Ingress buffer uses "
             << pendingReadSize_ << " of " << readBufLimit_ << " bytes.";
-    if (pendingReadSize_ > readBufLimit_ && oldSize <= readBufLimit_) {
+    if (ingressLimitExceeded() && oldSize <= readBufLimit_) {
       if (infoCallback_) {
         infoCallback_->onIngressLimitExceeded(*this);
       }
@@ -166,6 +171,9 @@ void HTTPSessionBase::updateWriteBufSize(int64_t delta) {
   delta += pendingWriteSizeDelta_;
   pendingWriteSizeDelta_ = 0;
   DCHECK(delta >= 0 || uint64_t(-delta) <= pendingWriteSize_);
+  if (sessionStats_) {
+    sessionStats_->recordPendingBufferedWriteBytes(delta);
+  }
   pendingWriteSize_ += delta;
 }
 

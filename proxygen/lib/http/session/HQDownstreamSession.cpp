@@ -84,11 +84,8 @@ HQDownstreamSession::createEgressPushStream(hq::PushId pushId,
           << " isClosing()=" << isClosing() << " streamId=" << streamId
           << " parentStreamId=" << parentStreamId;
 
-  // Version utils SHOULD be created before a stream transport is created
-  DCHECK(versionUtils_);
-
   // Use version utils to ensure that the session is not in draining state
-  if (!versionUtils_->checkNewStream(streamId)) {
+  if (!checkNewStream(streamId)) {
     VLOG(3) << __func__ << " Not creating - session is draining"
             << " sess=" << *this << " pushId=" << pushId
             << " isClosing()=" << isClosing() << " streamId=" << streamId
@@ -96,7 +93,7 @@ HQDownstreamSession::createEgressPushStream(hq::PushId pushId,
     return nullptr;
   }
 
-  auto codec = versionUtils_->createCodec(streamId);
+  auto codec = createCodec(streamId);
 
   auto matchPair = egressPushStreams_.emplace(
       std::piecewise_construct,
@@ -281,9 +278,9 @@ folly::Optional<HTTPHeaders> HQDownstreamSession::getExtraHeaders(
     return folly::none;
   }
   HTTPHeaders extraHeaders;
-  extraHeaders.add(
-      HTTP_HEADER_PRIORITY,
-      httpPriorityToString(priority->level, priority->incremental));
+  extraHeaders.add(HTTP_HEADER_PRIORITY,
+                   httpPriorityToString(
+                       HTTPPriority(priority->level, priority->incremental)));
   return extraHeaders;
 }
 

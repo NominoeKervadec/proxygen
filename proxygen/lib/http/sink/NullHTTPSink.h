@@ -35,7 +35,9 @@ class NullHTTPSink : public HTTPSink {
   [[nodiscard]] HTTPTransaction* FOLLY_NULLABLE getHTTPTxn() const override {
     return nullptr;
   }
-  void detachHandler() override {
+  void detachAndAbortIfIncomplete(std::unique_ptr<HTTPSink>) override {
+    LOG(ERROR) << "detachAndAbortIfIncomplete event is not expected for "
+                  "NullHTTPSink";
   }
   // Sending data
   void sendHeaders(const HTTPMessage& /*headers*/) override {
@@ -77,24 +79,6 @@ class NullHTTPSink : public HTTPSink {
     XLOG(ERR) << "canSendHeaders event is not expected for NullHTTPSink";
     return false;
   }
-  void sendAbortIfIncomplete() override {
-    LOG(ERROR) << "sendAbortIfIncomplete event is not expected for "
-                  "NullHTTPSink";
-  }
-  HTTPTransaction* newPushedTransaction(HTTPPushTransactionHandler* /*handler*/,
-                                        ProxygenError* /*error*/) override {
-    LOG(ERROR) << "newPushedTransaction event is not expected for NullHTTPSink";
-    return nullptr;
-  }
-  HTTPTransaction* newExTransaction(HTTPTransaction::Handler* /*handler*/,
-                                    bool /*unidirectional*/) override {
-    LOG(ERROR) << "newExTransaction event is not expected for NullHTTPSink";
-    return nullptr;
-  }
-  [[nodiscard]] bool extraResponseExpected() const override {
-    XLOG(ERR) << "extraResponseExpected event is not expected for NullHTTPSink";
-    return false;
-  }
   const wangle::TransportInfo& getSetupTransportInfo() const noexcept override {
     static wangle::TransportInfo dummy;
     LOG(ERROR)
@@ -110,14 +94,8 @@ class NullHTTPSink : public HTTPSink {
   void pauseIngress() override {
     XLOG(ERR) << "pauseIngress event is not expected for NullHTTPSink";
   }
-  void pauseEgress() override {
-    XLOG(ERR) << "pauseEgress event is not expected for NullHTTPSink";
-  }
   void resumeIngress() override {
     XLOG(ERR) << "resumeIngress event is not expected for NullHTTPSink";
-  }
-  void resumeEgress() override {
-    XLOG(ERR) << "resumeEgress event is not expected for NullHTTPSink";
   }
   [[nodiscard]] bool isIngressPaused() const override {
     XLOG(ERR) << "isIngressPaused not expected for NullHTTPSink";

@@ -156,6 +156,7 @@ add_library(
     http/ProxyStatus.cpp
     http/RFC2616.cpp
     http/sink/HTTPTransactionSink.cpp
+    http/observer/HTTPSessionObserverInterface.cpp
     http/session/ByteEvents.cpp
     http/session/ByteEventTracker.cpp
     http/session/CodecErrorResponseHandler.cpp
@@ -183,12 +184,12 @@ add_library(
     pools/generators/ServerListGenerator.cpp
     sampling/Sampling.cpp
     services/RequestWorkerThread.cpp
+    services/RequestWorkerThreadNoExecutor.cpp
     services/Service.cpp
     services/WorkerThread.cpp
     stats/ResourceStats.cpp
     transport/PersistentFizzPskCache.cpp
     utils/AsyncTimeoutSet.cpp
-    utils/Base64.cpp
     utils/CryptUtil.cpp
     utils/Exception.cpp
     utils/HTTPTime.cpp

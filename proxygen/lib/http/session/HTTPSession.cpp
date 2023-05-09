@@ -101,7 +101,9 @@ HTTPSession::HTTPSession(const WheelTimerInstance& wheelTimer,
       resetSocketOnShutdown_(false),
       inLoopCallback_(false),
       pendingPause_(false),
-      writeBufSplit_(false) {
+      writeBufSplit_(false),
+      sessionObserverAccessor_(this),
+      sessionObserverContainer_(&sessionObserverAccessor_) {
   setByteEventTracker(std::make_shared<ByteEventTracker>(this));
   initialReceiveWindow_ = receiveStreamWindowSize_ = receiveSessionWindowSize_ =
       codec_->getDefaultWindowSize();
@@ -846,6 +848,23 @@ void HTTPSession::onHeadersComplete(HTTPCodec::StreamID streamID,
   if (infoCallback_) {
     infoCallback_->onIngressMessage(*this, *msg.get());
   }
+
+  // Inform observers when request headers (i.e. ingress, from downstream
+  // client) are processed.
+  if (isDownstream()) {
+    if (auto msgPtr = msg.get()) {
+      const auto event =
+          HTTPSessionObserverInterface::RequestStartedEvent::Builder()
+              .setHeaders(msgPtr->getHeaders())
+              .build();
+      sessionObserverContainer_.invokeInterfaceMethod<
+          HTTPSessionObserverInterface::Events::requestStarted>(
+          [&event](auto observer, auto observed) {
+            observer->requestStarted(observed, event);
+          });
+    }
+  }
+
   HTTPTransaction* txn = findTransaction(streamID);
   if (!txn) {
     invalidStream(streamID);
@@ -1604,6 +1623,20 @@ void HTTPSession::sendHeaders(HTTPTransaction* txn,
   }
   scheduleWrite();
   onHeadersSent(headers, wasReusable);
+
+  // If this is a client sending request headers to upstream
+  // invoke requestStarted event for attached observers.
+  if (isUpstream()) {
+    const auto event =
+        HTTPSessionObserverInterface::RequestStartedEvent::Builder()
+            .setHeaders(headers.getHeaders())
+            .build();
+    sessionObserverContainer_.invokeInterfaceMethod<
+        HTTPSessionObserverInterface::Events::requestStarted>(
+        [&event](auto observer, auto observed) {
+          observer->requestStarted(observed, event);
+        });
+  }
 }
 
 void HTTPSession::commonEom(HTTPTransaction* txn,
@@ -1931,10 +1964,10 @@ void HTTPSession::detach(HTTPTransaction* txn) noexcept {
     if (getConnectionManager()) {
       getConnectionManager()->onDeactivated(*this);
     }
-  } else {
-    if (infoCallback_) {
-      infoCallback_->onTransactionDetached(*this);
-    }
+  }
+
+  if (infoCallback_) {
+    infoCallback_->onTransactionDetached(*this);
   }
 
   if (!readsShutdown()) {
@@ -2160,7 +2193,7 @@ void HTTPSession::runLoopCallback() noexcept {
     inLoopCallback_ = false;
     // This ScopeGuard needs to be under the above DestructorGuard
     updatePendingWrites();
-    if (!hasMoreWrites()) {
+    if (!hasMoreWrites() && isDownstream() && !hasPendingEgress()) {
       invokeOnAllTransactions([](HTTPTransaction* txn) {
         txn->checkIfEgressRateLimitedByUpstream();
       });
@@ -2171,12 +2204,6 @@ void HTTPSession::runLoopCallback() noexcept {
 
   for (uint32_t i = 0; i < kMaxWritesPerLoop; ++i) {
     bodyBytesPerWriteBuf_ = 0;
-    if (isPrioritySampled()) {
-      invokeOnAllTransactions([this](HTTPTransaction* txn) {
-        txn->updateContentionsCount(txnEgressQueue_.numPendingEgress());
-      });
-    }
-
     bool cork = true;
     bool timestampTx = false;
     bool timestampAck = false;
@@ -2193,12 +2220,6 @@ void HTTPSession::runLoopCallback() noexcept {
     if (len == 0) {
       checkForShutdown();
       return;
-    }
-
-    if (isPrioritySampled()) {
-      invokeOnAllTransactions([this](HTTPTransaction* txn) {
-        txn->updateSessionBytesSheduled(bodyBytesPerWriteBuf_);
-      });
     }
 
     folly::WriteFlags flags = folly::WriteFlags::NONE;
@@ -2689,10 +2710,6 @@ HTTPTransaction* HTTPSession::createTransaction(
 
   HTTPTransaction* txn = &matchPair.first->second;
 
-  if (isPrioritySampled()) {
-    txn->setPrioritySampled(true /* sampled */);
-  }
-
   if (getNumTxnServed() > 0) {
     auto stats = txn->getSessionStats();
     if (stats != nullptr) {
@@ -2714,6 +2731,10 @@ HTTPTransaction* HTTPSession::createTransaction(
     incrementIncomingStreams(txn);
   }
   // Downstream push is counted in HTTPSession::sendHeaders
+
+  if (infoCallback_) {
+    infoCallback_->onTransactionAttached(*this);
+  }
 
   return txn;
 }
@@ -2775,7 +2796,7 @@ void HTTPSession::writeSuccess() noexcept {
     //             data to send...
     if (numActiveWrites_ == 0 && hasMoreWrites()) {
       runLoopCallback();
-    } else {
+    } else if (isDownstream() && !hasPendingEgress()) {
       invokeOnAllTransactions([](HTTPTransaction* txn) {
         txn->checkIfEgressRateLimitedByUpstream();
       });

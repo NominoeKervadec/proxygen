@@ -140,6 +140,25 @@ TEST(HTTPMessage, SetInvalidURL) {
   EXPECT_EQ(msg.getPathAsStringPiece(), "");
 }
 
+TEST(HTTPMessage, SetURLEmpty) {
+  HTTPMessage msg;
+
+  auto res = msg.setURL("");
+  EXPECT_FALSE(res.valid());
+  EXPECT_EQ(msg.getPathAsStringPiece(), "");
+}
+
+TEST(HTTPMessage, SetAbsoluteURLNoPath) {
+  HTTPMessage msg;
+
+  auto res = msg.setURL("http://www.foo.com");
+  EXPECT_TRUE(res.valid());
+  EXPECT_EQ(msg.getPathAsStringPiece(), "/");
+  EXPECT_EQ(msg.getPath(), msg.getPathAsStringPiece());
+  // getPathAsStringPiece points to constant string and getPath points to copy
+  EXPECT_NE(msg.getPath().data(), msg.getPathAsStringPiece().begin());
+}
+
 TEST(HTTPMessage, TestHeaderPreservation) {
   HTTPMessage msg;
   HTTPHeaders& hdrs = msg.getHeaders();
@@ -379,6 +398,7 @@ TEST(HTTPMessage, TestHeaderStripPerHop) {
   msg.getHeaders().add(HTTP_HEADER_CONNECTION, ", e");
   msg.getHeaders().add(HTTP_HEADER_CONNECTION, " f ,\tg\t, \r\n\th ");
   msg.getHeaders().add("Keep-Alive", "true");
+  msg.getHeaders().add("Priority", "u=5, i");
 
   msg.getHeaders().add("a", "1");
   msg.getHeaders().add("b", "2");
@@ -389,10 +409,13 @@ TEST(HTTPMessage, TestHeaderStripPerHop) {
   msg.getHeaders().add("g", "7");
   msg.getHeaders().add("h", "8");
 
-  EXPECT_EQ(msg.getHeaders().size(), 15);
+  EXPECT_EQ(msg.getHeaders().size(), 16);
   msg.stripPerHopHeaders();
-  EXPECT_EQ(msg.getHeaders().size(), 0);
+  EXPECT_EQ(msg.getHeaders().size(), 1);
   EXPECT_EQ(msg.getStrippedPerHopHeaders().size(), 15);
+  msg.stripPerHopHeaders(/* stripPriority */ true);
+  EXPECT_EQ(msg.getHeaders().size(), 0);
+  EXPECT_EQ(msg.getStrippedPerHopHeaders().size(), 1);
 }
 
 TEST(HTTPMessage, TestEmptyName) {
@@ -432,7 +455,7 @@ void testPathAndQuery(const string& url,
 TEST(GetPathAndQuery, ParseURL) {
   testPathAndQuery("http://localhost:80/foo?bar#qqq", "/foo", "bar");
   testPathAndQuery("localhost:80/foo?bar#qqq", "/foo", "bar");
-  testPathAndQuery("localhost", "", "");
+  testPathAndQuery("localhost", "/", "");
   testPathAndQuery("/f/o/o?bar#qqq", "/f/o/o", "bar");
   testPathAndQuery("#?hello", "", "");
 }
@@ -740,6 +763,17 @@ TEST(HTTPMessage, HTTPPrioritySetOutRangeUrgency) {
   auto priHeaderViaGetter = message.getHTTPPriority();
   EXPECT_EQ(7, priHeaderViaGetter->urgency);
   EXPECT_TRUE(priHeaderViaGetter->incremental);
+}
+
+TEST(HTTPMessage, HTTPPriorityOrderIdSetGet) {
+  HTTPMessage message;
+  message.setHTTPPriority(HTTPPriority(7, false, 10));
+  EXPECT_EQ(httpPriorityFromHTTPMessage(message)->orderId, 10);
+  auto& priHeader = message.getHeaders().getSingleOrEmpty(HTTP_HEADER_PRIORITY);
+  EXPECT_EQ("u=7,o=10", priHeader);
+  auto priHeaderViaGetter = message.getHTTPPriority();
+  EXPECT_EQ(priHeaderViaGetter->urgency, 7);
+  EXPECT_EQ(priHeaderViaGetter->orderId, 10);
 }
 
 TEST(HTTPHeaders, GetSetOnResize) {

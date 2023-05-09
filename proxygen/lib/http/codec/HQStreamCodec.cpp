@@ -77,6 +77,7 @@ ParseResult HQStreamCodec::checkFrameAllowed(FrameType type) {
     case hq::FrameType::PUSH_PRIORITY_UPDATE:
     case hq::FrameType::FB_PRIORITY_UPDATE:
     case hq::FrameType::FB_PUSH_PRIORITY_UPDATE:
+    case hq::FrameType::WEBTRANSPORT_BIDI:
       return HTTP3::ErrorCode::HTTP_FRAME_UNEXPECTED;
     case hq::FrameType::PUSH_PROMISE:
       if (transportDirection_ == TransportDirection::DOWNSTREAM) {
@@ -240,8 +241,7 @@ void HQStreamCodec::onHeadersComplete(HTTPHeaderSize decodedSize,
   msg->setAdvancedProtocolString(getCodecProtocolString(CodecProtocol::HQ));
 
   if (curHeader_.type == hq::FrameType::HEADERS) {
-    if (!finalIngressHeadersSeen_ &&
-        (msg->isRequest() || !msg->is1xxResponse())) {
+    if (!finalIngressHeadersSeen_ && msg->isFinal()) {
       finalIngressHeadersSeen_ = true;
     }
   }
@@ -384,6 +384,16 @@ size_t HQStreamCodec::generateBody(folly::IOBufQueue& writeBuf,
   size_t bytesWritten = generateBodyImpl(writeBuf, std::move(chain));
 
   return bytesWritten;
+}
+
+size_t HQStreamCodec::generateBodyDSR(StreamID stream,
+                                      size_t length,
+                                      folly::Optional<uint8_t> /*padding*/,
+                                      bool /*eom*/) {
+  DCHECK_EQ(stream, streamId_);
+
+  // Assuming we have generated a single DATA frame.
+  return length;
 }
 
 size_t HQStreamCodec::generateTrailers(folly::IOBufQueue& writeBuf,

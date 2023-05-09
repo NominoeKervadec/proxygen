@@ -199,6 +199,10 @@ class HQMultiCodec : public HQControlCodec {
     return getCodec(stream).generateEOM(writeBuf, stream);
   }
 
+  void setHeaderCodecStats(HeaderCodec::Stats* hcStats) override {
+    qpackCodec_.setStats(hcStats);
+  }
+
   CompressionInfo getCompressionInfo() const override {
     return qpackCodec_.getCompressionInfo();
   }
@@ -219,6 +223,11 @@ class HQMultiCodec : public HQControlCodec {
 
   void onIngressPushId(uint64_t pushId) {
     minUnseenPushID_ = std::max(minUnseenPushID_, pushId + 1);
+  }
+
+  bool supportsWebTransport() const {
+    return ingressSettings_.getSetting(SettingsId::ENABLE_WEBTRANSPORT, 0) &&
+           egressSettings_.getSetting(SettingsId::ENABLE_WEBTRANSPORT, 0);
   }
 
  protected:
